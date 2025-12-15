@@ -1,7 +1,6 @@
 ﻿#include "PixelRender.h"
 #include <iostream>
 #include <vector>
-#include <map>
 #include <set>
 #include <random>
 #include <memory>
@@ -18,12 +17,14 @@ private:
     RGBA m_fillColor = { 255,255,255,255 }; // Color del relleno
     int m_drawMode = 0; // 0=Line,1=Ellipse,2=Rectangle,3=Triangle
     int m_lineThickness = 1; // line thickness
+    bool m_useFilledShapes = false;
 
     // Base class para todas las figuras
     struct Shape {
         RGBA borderColor;
         RGBA fillColor;
         int thickness;
+        bool filled;
         virtual ~Shape() = default;
         virtual void draw(CMyTest* renderer) = 0;
     };
@@ -39,21 +40,36 @@ private:
         int cx, cy; // center
         int a, b; // radii
         void draw(CMyTest* renderer) override {
-            renderer->drawEllipseFilled(cx, cy, a, b, fillColor, borderColor, thickness);
+            if (filled) {
+                renderer->drawEllipseFilled(cx, cy, a, b, fillColor, borderColor, thickness);
+            }
+            else {
+                renderer->drawEllipseOutline(cx, cy, a, b, borderColor, thickness);
+            }
         }
     };
 
     struct Rectangle : public Shape {
         int xmin, ymin, xmax, ymax;
         void draw(CMyTest* renderer) override {
-            renderer->drawRectangleFilled(xmin, ymin, xmax, ymax, fillColor, borderColor, thickness);
+            if (filled) {
+                renderer->drawRectangleFilled(xmin, ymin, xmax, ymax, fillColor, borderColor, thickness);
+            }
+            else {
+                renderer->drawRectangleOutline(xmin, ymin, xmax, ymax, borderColor, thickness);
+            }
         }
     };
 
     struct Triangle : public Shape {
         int x0, y0, x1, y1, x2, y2;
         void draw(CMyTest* renderer) override {
-            renderer->drawTriangleFilled(x0, y0, x1, y1, x2, y2, fillColor, borderColor, thickness);
+            if (filled) {
+                renderer->drawTriangleFilled(x0, y0, x1, y1, x2, y2, fillColor, borderColor, thickness);
+            }
+            else {
+                renderer->drawTriangleOutline(x0, y0, x1, y1, x2, y2, borderColor, thickness);
+            }
         }
     };
 
@@ -220,11 +236,11 @@ public:
         m_drawnPixels.clear();
     }
 
-    void drawLine(int x0, int y0, int x1, int y1, RGBA color)
+    /*void drawLine(int x0, int y0, int x1, int y1, RGBA color)
     {
         drawLine(x0, y0, x1, y1, color, 1);
-    }
-    void drawLine(int x0, int y0, int x1, int y1, RGBA color, int thickness)
+    }*/
+    void drawLine(int x0, int y0, int x1, int y1, RGBA color, int thickness = 1)
     {
         drawLineBresenham(x0, y0, x1, y1, color, thickness);
     }
@@ -238,8 +254,8 @@ public:
         setThickPixel(static_cast<int>(cx - x), static_cast<int>(cy - y), color, thickness);
     }
 
-    // drawEllipse2 using long long integer arithmetic (with thickness)
-    void drawEllipse2(int cx, int cy, int a, int b, RGBA color, int thickness)
+    // drawEllipseOutline using long long integer arithmetic (with thickness)
+    void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color, int thickness)
     {
         // Limpiar el conjunto de píxeles dibujados
         m_drawnPixels.clear();
@@ -298,13 +314,13 @@ public:
         m_drawnPixels.clear();
     }
 
-    void drawEllipse2(int cx, int cy, int a, int b, RGBA color)
+    void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color)
     {
-        drawEllipse2(cx, cy, a, b, color, 1);
+        drawEllipseOutline(cx, cy, a, b, color, 1);
     }
 
     // Draw rectangle by drawing its four edges (use drawLine with thickness)
-    void drawRectangle(int x0, int y0, int x1, int y1, RGBA color, int thickness)
+    void drawRectangleOutline(int x0, int y0, int x1, int y1, RGBA color, int thickness)
     {
         int xmin = std::min(x0, x1);
         int xmax = std::max(x0, x1);
@@ -318,7 +334,7 @@ public:
     }
 
     // Draw triangle by drawing three lines
-    void drawTriangle(int x0, int y0, int x1, int y1, int x2, int y2, RGBA color, int thickness)
+    void drawTriangleOutline(int x0, int y0, int x1, int y1, int x2, int y2, RGBA color, int thickness)
     {
         drawLine(x0, y0, x1, y1, color, thickness);
         drawLine(x1, y1, x2, y2, color, thickness);
@@ -450,7 +466,7 @@ public:
         }
 
         // Dibujar el borde encima del relleno
-        drawTriangle(x0, y0, x1, y1, x2, y2, borderColor, thickness);
+        drawTriangleOutline(x0, y0, x1, y1, x2, y2, borderColor, thickness);
     }
 
     // Relleno de elipse siguiendo el PDF
@@ -459,7 +475,7 @@ public:
         if (a <= 0 || b <= 0) return;
 
         // Primero dibujar el borde completo
-        drawEllipse2(cx, cy, a, b, borderColor, thickness);
+        drawEllipseOutline(cx, cy, a, b, borderColor, thickness);
 
         // Calcular cuánto del grosor del borde se adentra hacia el interior
         int innerMargin = (thickness - 1) / 2;
@@ -498,7 +514,7 @@ public:
         int ymax = std::max(y0, y1);
 
         // Primero dibujar el borde completo
-        drawRectangle(xmin, ymin, xmax, ymax, borderColor, thickness);
+        drawRectangleOutline(xmin, ymin, xmax, ymax, borderColor, thickness);
 
         // Calcular cuánto del grosor del borde se adentra hacia el interior
         int innerMargin = (thickness - 1) / 2;
@@ -537,10 +553,20 @@ public:
             else if (m_drawMode == 1) { // Ellipse
                 int a = std::abs(m_x1 - m_x0);
                 int b = std::abs(m_y1 - m_y0);
-                drawEllipseFilled(m_x0, m_y0, a, b, m_fillColor, m_borderColor, m_lineThickness);
+                if (m_useFilledShapes) { // <-- ¡NUEVA LÓGICA DE PREVISUALIZACIÓN!
+                    drawEllipseFilled(m_x0, m_y0, a, b, m_fillColor, m_borderColor, m_lineThickness);
+                }
+                else {
+                    drawEllipseOutline(m_x0, m_y0, a, b, m_borderColor, m_lineThickness);
+                }
             }
             else if (m_drawMode == 2) { // Rectangle
-                drawRectangleFilled(m_x0, m_y0, m_x1, m_y1, m_fillColor, m_borderColor, m_lineThickness);
+                if (m_useFilledShapes) { // <-- ¡NUEVA LÓGICA DE PREVISUALIZACIÓN!
+                    drawRectangleFilled(m_x0, m_y0, m_x1, m_y1, m_fillColor, m_borderColor, m_lineThickness);
+                }
+                else {
+                    drawRectangleOutline(m_x0, m_y0, m_x1, m_y1, m_borderColor, m_lineThickness);
+                }
             }
             else if (m_drawMode == 3) { // Triangle preview
                 if (m_triClicks == 1) {
@@ -560,7 +586,12 @@ public:
                     drawLine(m_triTempX[0], m_triTempY[0], cx, cy, m_borderColor, m_lineThickness);
                 }
                 else if (m_triClicks == 2) {
-                    drawTriangleFilled(m_triTempX[0], m_triTempY[0], m_triTempX[1], m_triTempY[1], cx, cy, m_fillColor, m_borderColor, m_lineThickness);
+                    if (m_useFilledShapes) { // <-- ¡NUEVA LÓGICA DE PREVISUALIZACIÓN!
+                        drawTriangleFilled(m_triTempX[0], m_triTempY[0], m_triTempX[1], m_triTempY[1], cx, cy, m_fillColor, m_borderColor, m_lineThickness);
+                    }
+                    else {
+                        drawTriangleOutline(m_triTempX[0], m_triTempY[0], m_triTempX[1], m_triTempY[1], cx, cy, m_borderColor, m_lineThickness);
+                    }
                 }
             }
         }
@@ -622,6 +653,7 @@ public:
                             tr->borderColor = m_borderColor;
                             tr->fillColor = m_fillColor;
                             tr->thickness = m_lineThickness;
+                            tr->filled = m_useFilledShapes; // <-- ¡ESTE ES EL CAMBIO CLAVE!
                             m_shapes.push_back(std::move(tr));
                             m_triClicks = 0;
                             std::cout << "Triangle finalized.\n";
@@ -644,8 +676,10 @@ public:
                             auto ln = std::make_unique<Line>();
                             ln->x0 = m_x0; ln->y0 = m_y0; ln->x1 = m_x1; ln->y1 = m_y1;
                             ln->borderColor = m_borderColor;
-                            ln->fillColor = m_fillColor; // No se usa en líneas
+                            ln->fillColor = m_fillColor;
                             ln->thickness = m_lineThickness;
+                            // Lineas no tienen relleno visible en el código, pero por consistencia:
+                            ln->filled = m_useFilledShapes; // <-- Añadido para consistencia, aunque no afecta.
                             m_shapes.push_back(std::move(ln));
                         }
                         else if (m_drawMode == 1) { // Ellipse
@@ -655,6 +689,7 @@ public:
                             el->borderColor = m_borderColor;
                             el->fillColor = m_fillColor;
                             el->thickness = m_lineThickness;
+                            el->filled = m_useFilledShapes; // <-- ¡ESTE ES EL CAMBIO CLAVE!
                             m_shapes.push_back(std::move(el));
                         }
                         else if (m_drawMode == 2) { // Rectangle
@@ -666,6 +701,7 @@ public:
                             rc->borderColor = m_borderColor;
                             rc->fillColor = m_fillColor;
                             rc->thickness = m_lineThickness;
+                            rc->filled = m_useFilledShapes; // <-- ¡ESTE ES EL CAMBIO CLAVE!
                             m_shapes.push_back(std::move(rc));
                         }
 
@@ -708,7 +744,7 @@ public:
         ImGui::NewFrame();
 
         ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(300, (float)height), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(350, (float)height), ImGuiCond_Always);
         ImGuiWindowFlags panelFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
@@ -717,8 +753,26 @@ public:
         const char* modes[] = { "Line", "Ellipse", "Rectangle", "Triangle" };
         ImGui::Text("Draw Mode:");
         ImGui::ListBox("##mode", &m_drawMode, modes, IM_ARRAYSIZE(modes), 4);
-        ImGui::Separator();
+        
+		// Checkbox para elegir el relleno o solo borde
+        ImGui::Checkbox("Draw Filled Shapes", &m_useFilledShapes);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(tip)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Cuando esta activado, las nuevas figuras se dibujaran con relleno.");
+            ImGui::Text("Cuando esta desactivado, solo se dibujara el borde.");
+            ImGui::Text("Las figuras ya dibujadas no cambian.");
+            ImGui::EndTooltip();
+        }
 
+        if (m_drawMode == 3) {
+            ImGui::Separator();
+            ImGui::TextWrapped("Triangle mode: click three times to place the three vertices. Current clicks: %d", m_triClicks);
+            if (ImGui::Button("Reset Triangle Clicks")) m_triClicks = 0;
+        }
+
+        ImGui::Separator();
         ImGui::SliderInt("Line Thickness", &m_lineThickness, 1, 31);
         ImGui::Separator();
 
@@ -750,15 +804,13 @@ public:
             m_fillColor.a = static_cast<unsigned char>(fillCol[3] * 255.0f);
         }
 
+        
+
+
         ImGui::Separator();
         if (ImGui::Button("Clear screen")) {
             m_shapes.clear();
             m_triClicks = 0;
-        }
-
-        if (m_drawMode == 3) {
-            ImGui::TextWrapped("Triangle mode: click three times to place the three vertices. Current clicks: %d", m_triClicks);
-            if (ImGui::Button("Reset Triangle Clicks")) m_triClicks = 0;
         }
 
         ImGui::End();
