@@ -1,4 +1,4 @@
-#include "PixelRender.h"
+ï»¿#include "PixelRender.h"
 #include <iostream>
 #include <vector>
 #include <map>
@@ -57,7 +57,7 @@ private:
         }
     };
 
-    // Lista unificada de todas las figuras en orden de creación
+    // Lista unificada de todas las figuras en orden de creaciÃ³n
     std::vector<std::unique_ptr<Shape>> m_shapes;
 
     // Temp storage for triangle clicks
@@ -67,15 +67,20 @@ private:
 
     int framesThisSecond = 0; // contador de frames para calcular FPS
 
-    // Set para evitar dibujar el mismo píxel dos veces en una misma operación
+    // Set para evitar dibujar el mismo pÃ­xel dos veces en una misma operaciÃ³n
     std::set<std::pair<int, int>> m_drawnPixels;
+
+    // Estructura para almacenar los lÃ­mites internos del triÃ¡ngulo sin grosor
+    struct TriangleFillInfo {
+        std::vector<std::pair<int, int>> scanlines; // xmin, xmax por cada y
+    };
 
 public:
     CMyTest() {};
     ~CMyTest() {};
 
     // Helper: set a thick pixel (square) centered at x,y
-    // Usa un conjunto para evitar redibujar el mismo píxel
+    // Usa un conjunto para evitar redibujar el mismo pÃ­xel
     void setThickPixel(int x, int y, RGBA color, int thickness)
     {
         if (thickness <= 1) {
@@ -89,7 +94,7 @@ public:
                 int px = x + dx;
                 int py = y + dy;
 
-                // Solo dibujar si no hemos dibujado este píxel antes en esta operación
+                // Solo dibujar si no hemos dibujado este pÃ­xel antes en esta operaciÃ³n
                 if (m_drawnPixels.find({ px, py }) == m_drawnPixels.end()) {
                     setPixel(px, py, color);
                     m_drawnPixels.insert({ px, py });
@@ -98,10 +103,10 @@ public:
         }
     }
 
-    // Algoritmo de Bresenham para dibujar líneas (con grosor)
+    // Algoritmo de Bresenham para dibujar lÃ­neas (con grosor)
     void drawLineBresenham(int x0, int y0, int x1, int y1, RGBA color, int thickness)
     {
-        // Limpiar el conjunto de píxeles dibujados al inicio de cada línea
+        // Limpiar el conjunto de pÃ­xeles dibujados al inicio de cada lÃ­nea
         m_drawnPixels.clear();
 
         int dx = x1 - x0;
@@ -224,7 +229,7 @@ public:
         drawLineBresenham(x0, y0, x1, y1, color, thickness);
     }
 
-    // Dibuja 4 puntos simétricos de la elipse centrada en (cx,cy) con grosor
+    // Dibuja 4 puntos simÃ©tricos de la elipse centrada en (cx,cy) con grosor
     void ellipsePoints4(long long cx, long long cy, long long x, long long y, RGBA color, int thickness)
     {
         setThickPixel(static_cast<int>(cx + x), static_cast<int>(cy + y), color, thickness);
@@ -236,7 +241,7 @@ public:
     // drawEllipse2 using long long integer arithmetic (with thickness)
     void drawEllipse2(int cx, int cy, int a, int b, RGBA color, int thickness)
     {
-        // Limpiar el conjunto de píxeles dibujados
+        // Limpiar el conjunto de pÃ­xeles dibujados
         m_drawnPixels.clear();
 
         if (a <= 0 || b <= 0) return;
@@ -329,117 +334,123 @@ public:
         }
     }
 
-    // Almacenar información de los bordes de las figuras para el relleno
-    struct BorderInfo {
-        std::vector<std::pair<int, int>> scanlines; // Para cada y, guardar xmin y xmax del borde
-    };
-
-    // Calcular bordes de elipse usando el algoritmo de punto medio CON GROSOR
-    BorderInfo calculateEllipseBorder(int cx, int cy, int a, int b, int thickness)
+    // Calcular lÃ­mites de relleno usando lÃ­neas sin grosor
+    void calculateTriangleFillLine(TriangleFillInfo& info, int xa, int ya, int xb, int yb)
     {
-        BorderInfo info;
-        if (a <= 0 || b <= 0) return info;
+        int dx = xb - xa;
+        int dy = yb - ya;
+        int absDx = abs(dx);
+        int absDy = abs(dy);
 
-        // Mapa para guardar xmin y xmax por cada scanline y
-        std::map<int, std::pair<int, int>> scanlineMap;
+        if (absDy < absDx && dx > 0 && dy >= 0) {
+            int d = absDx - 2 * absDy;
+            int incE = -2 * absDy;
+            int incNE = 2 * (absDx - absDy);
+            int x = xa, y = ya;
 
-        long long a2 = static_cast<long long>(a) * static_cast<long long>(a);
-        long long b2 = static_cast<long long>(b) * static_cast<long long>(b);
-
-        long long x = 0;
-        long long y = b;
-        long long dx = 2 * b2 * x;
-        long long dy = 2 * a2 * y;
-        long long d1 = b2 - a2 * b + (a2 + 3) / 4;
-        long long twoB2 = 2 * b2;
-        long long twoA2 = 2 * a2;
-
-        int half = (thickness - 1) / 2;
-
-        // Set para evitar marcar el mismo píxel dos veces
-        std::set<std::pair<int, int>> markedPixels;
-
-        // Función auxiliar para marcar un píxel grueso en el mapa
-        auto markThickPoint = [&](int px, int py) {
-            for (int dy = -half; dy <= half; ++dy) {
-                for (int dx = -half; dx <= half; ++dx) {
-                    int xx = px + dx;
-                    int yy = py + dy;
-
-                    // Solo marcar si no se ha marcado antes
-                    if (markedPixels.find({ xx, yy }) == markedPixels.end()) {
-                        markedPixels.insert({ xx, yy });
-
-                        if (yy >= 0 && yy < height) {
-                            if (scanlineMap.find(yy) == scanlineMap.end()) {
-                                scanlineMap[yy] = { xx, xx };
-                            }
-                            else {
-                                scanlineMap[yy].first = std::min(scanlineMap[yy].first, xx);
-                                scanlineMap[yy].second = std::max(scanlineMap[yy].second, xx);
-                            }
-                        }
-                    }
+            while (x <= xb) {
+                if (y >= 0 && y < (int)info.scanlines.size()) {
+                    info.scanlines[y].first = std::min(info.scanlines[y].first, x);
+                    info.scanlines[y].second = std::max(info.scanlines[y].second, x);
                 }
+                if (x == xb) break;
+                if (d <= 0) { d += incNE; y++; }
+                else { d += incE; }
+                x++;
             }
-            };
+        }
+        else if (absDy >= absDx && dx >= 0 && dy > 0) {
+            int d = absDy - 2 * absDx;
+            int incN = -2 * absDx;
+            int incNE = 2 * (absDy - absDx);
+            int x = xa, y = ya;
 
-        // Región 1
-        while (dx < dy) {
-            // Marcar los 4 puntos simétricos con grosor
-            markThickPoint(cx + x, cy + y);
-            markThickPoint(cx - x, cy + y);
-            markThickPoint(cx + x, cy - y);
-            markThickPoint(cx - x, cy - y);
-
-            if (d1 < 0) {
-                x += 1;
-                dx += twoB2;
-                d1 += dx + b2;
+            while (y <= yb) {
+                if (y >= 0 && y < (int)info.scanlines.size()) {
+                    info.scanlines[y].first = std::min(info.scanlines[y].first, x);
+                    info.scanlines[y].second = std::max(info.scanlines[y].second, x);
+                }
+                if (y == yb) break;
+                if (d <= 0) { d += incNE; x++; }
+                else { d += incN; }
+                y++;
             }
-            else {
-                x += 1;
-                y -= 1;
-                dx += twoB2;
-                dy -= twoA2;
-                d1 += dx - dy + b2;
+        }
+        else if (absDy < absDx && dx > 0 && dy < 0) {
+            int d = absDx - 2 * absDy;
+            int incE = -2 * absDy;
+            int incSE = 2 * (absDx - absDy);
+            int x = xa, y = ya;
+
+            while (x <= xb) {
+                if (y >= 0 && y < (int)info.scanlines.size()) {
+                    info.scanlines[y].first = std::min(info.scanlines[y].first, x);
+                    info.scanlines[y].second = std::max(info.scanlines[y].second, x);
+                }
+                if (x == xb) break;
+                if (d <= 0) { d += incSE; y--; }
+                else { d += incE; }
+                x++;
+            }
+        }
+        else if (absDy >= absDx && dx >= 0 && dy < 0) {
+            int d = absDy - 2 * absDx;
+            int incS = -2 * absDx;
+            int incSE = 2 * (absDy - absDx);
+            int x = xa, y = ya;
+
+            while (y >= yb) {
+                if (y >= 0 && y < (int)info.scanlines.size()) {
+                    info.scanlines[y].first = std::min(info.scanlines[y].first, x);
+                    info.scanlines[y].second = std::max(info.scanlines[y].second, x);
+                }
+                if (y == yb) break;
+                if (d <= 0) { d += incSE; x++; }
+                else { d += incS; }
+                y--;
+            }
+        }
+        else if (dx < 0) {
+            calculateTriangleFillLine(info, xb, yb, xa, ya);
+        }
+    }
+
+    // Relleno de triÃ¡ngulo: primero relleno, luego borde
+    void drawTriangleFilled(int x0, int y0, int x1, int y1, int x2, int y2, RGBA fillColor, RGBA borderColor, int thickness)
+    {
+        // Calcular los lÃ­mites internos del triÃ¡ngulo (sin considerar grosor)
+        TriangleFillInfo fillInfo;
+        fillInfo.scanlines.resize(height, { width, -1 });
+
+        // Calcular las tres aristas sin grosor
+        calculateTriangleFillLine(fillInfo, x0, y0, x1, y1);
+        calculateTriangleFillLine(fillInfo, x1, y1, x2, y2);
+        calculateTriangleFillLine(fillInfo, x2, y2, x0, y0);
+
+        // Encontrar el rango de y
+        int ymin = std::min({ y0, y1, y2 });
+        int ymax = std::max({ y0, y1, y2 });
+
+        // Calcular el margen interno basado en el grosor del borde
+        int innerMargin = (thickness - 1) / 2 + 1;
+
+        // Dibujar el relleno, ajustando para que quede dentro del borde
+        for (int y = ymin; y <= ymax; ++y) {
+            if (y < 0 || y >= height) continue;
+
+            auto edge = fillInfo.scanlines[y];
+            if (edge.second < 0) continue;
+
+            int xmin = edge.first + innerMargin;
+            int xmax = edge.second - innerMargin;
+
+            if (xmin <= xmax) {
+                drawHorizontalLine(xmin, xmax, y, fillColor);
             }
         }
 
-        // Región 2
-        long long d2_num_x = (2 * x + 1);
-        long long d2 = b2 * (d2_num_x * d2_num_x) / 4 + a2 * (y - 1) * (y - 1) - a2 * b2;
-
-        while (y >= 0) {
-            markThickPoint(cx + x, cy + y);
-            markThickPoint(cx - x, cy + y);
-            markThickPoint(cx + x, cy - y);
-            markThickPoint(cx - x, cy - y);
-
-            if (d2 > 0) {
-                y -= 1;
-                dy -= twoA2;
-                d2 += a2 - dy;
-            }
-            else {
-                y -= 1;
-                x += 1;
-                dx += twoB2;
-                dy -= twoA2;
-                d2 += dx - dy + a2;
-            }
-        }
-
-        // Convertir el mapa a vector
-        info.scanlines.resize(height, { width, -1 });
-        for (const auto& entry : scanlineMap) {
-            int yy = entry.first;
-            if (yy >= 0 && yy < height) {
-                info.scanlines[yy] = entry.second;
-            }
-        }
-
-        return info;
+        // Dibujar el borde encima del relleno
+        drawTriangle(x0, y0, x1, y1, x2, y2, borderColor, thickness);
     }
 
     // Relleno de elipse siguiendo el PDF
@@ -450,7 +461,7 @@ public:
         // Primero dibujar el borde completo
         drawEllipse2(cx, cy, a, b, borderColor, thickness);
 
-        // Calcular cuánto del grosor del borde se adentra hacia el interior
+        // Calcular cuÃ¡nto del grosor del borde se adentra hacia el interior
         int innerMargin = (thickness - 1) / 2;
 
         // Reducir los radios para el relleno, considerando que el borde ocupa espacio hacia adentro
@@ -459,11 +470,11 @@ public:
 
         if (innerA <= 0 || innerB <= 0) return; // No hay espacio para rellenar
 
-        // Rellenar el área interior de la elipse
+        // Rellenar el Ã¡rea interior de la elipse
         for (int y = cy - innerB; y <= cy + innerB; ++y) {
             if (y < 0 || y >= height) continue;
 
-            // Calcular los límites horizontales usando la ecuación de la elipse interior
+            // Calcular los lÃ­mites horizontales usando la ecuaciÃ³n de la elipse interior
             float y_rel = static_cast<float>(y - cy) / innerB;
             float x_width = innerA * std::sqrt(1.0f - y_rel * y_rel);
             int x_start = static_cast<int>(cx - x_width);
@@ -478,7 +489,7 @@ public:
     }
 
 
-    // Relleno de rectángulo siguiendo el PDF
+    // Relleno de rectÃ¡ngulo siguiendo el PDF
     void drawRectangleFilled(int x0, int y0, int x1, int y1, RGBA fillColor, RGBA borderColor, int thickness)
     {
         int xmin = std::min(x0, x1);
@@ -489,160 +500,21 @@ public:
         // Primero dibujar el borde completo
         drawRectangle(xmin, ymin, xmax, ymax, borderColor, thickness);
 
-        // Calcular cuánto del grosor del borde se adentra hacia el interior
+        // Calcular cuÃ¡nto del grosor del borde se adentra hacia el interior
         int innerMargin = (thickness - 1) / 2;
 
-        // Ajustar para que el relleno empiece DESPUÉS de la parte interior del borde
+        // Ajustar para que el relleno empiece DESPUÃ‰S de la parte interior del borde
         int innerXmin = xmin + innerMargin + 1;
         int innerXmax = xmax - innerMargin - 1;
         int innerYmin = ymin + innerMargin + 1;
         int innerYmax = ymax - innerMargin - 1;
 
-        // Solo rellenar si hay espacio interior después de considerar el borde
+        // Solo rellenar si hay espacio interior despuÃ©s de considerar el borde
         if (innerXmin <= innerXmax && innerYmin <= innerYmax) {
             for (int y = innerYmin; y <= innerYmax; ++y) {
                 drawHorizontalLine(innerXmin, innerXmax, y, fillColor);
             }
         }
-    }
-
-
-    // Calcular bordes del triángulo usando Bresenham CON GROSOR
-    void calculateTriangleBorderLine(BorderInfo& info, int xa, int ya, int xb, int yb, int thickness)
-    {
-        int dx = xb - xa;
-        int dy = yb - ya;
-        int absDx = abs(dx);
-        int absDy = abs(dy);
-        int half = (thickness - 1) / 2;
-
-        // Set local para evitar marcar el mismo píxel dos veces en esta línea
-        std::set<std::pair<int, int>> localMarked;
-
-        // Función auxiliar para marcar un píxel grueso
-        auto markThickPoint = [&](int px, int py) {
-            for (int dyy = -half; dyy <= half; ++dyy) {
-                for (int dxx = -half; dxx <= half; ++dxx) {
-                    int xx = px + dxx;
-                    int yy = py + dyy;
-
-                    if (localMarked.find({ xx, yy }) == localMarked.end()) {
-                        localMarked.insert({ xx, yy });
-
-                        if (yy >= 0 && yy < height) {
-                            info.scanlines[yy].first = std::min(info.scanlines[yy].first, xx);
-                            info.scanlines[yy].second = std::max(info.scanlines[yy].second, xx);
-                        }
-                    }
-                }
-            }
-            };
-
-        if (absDy < absDx && dx > 0 && dy >= 0) {
-            int d = absDx - 2 * absDy;
-            int incE = -2 * absDy;
-            int incNE = 2 * (absDx - absDy);
-            int x = xa, y = ya;
-
-            while (x <= xb) {
-                markThickPoint(x, y);
-                if (x == xb) break;
-                if (d <= 0) { d += incNE; y++; }
-                else { d += incE; }
-                x++;
-            }
-        }
-        else if (absDy >= absDx && dx >= 0 && dy > 0) {
-            int d = absDy - 2 * absDx;
-            int incN = -2 * absDx;
-            int incNE = 2 * (absDy - absDx);
-            int x = xa, y = ya;
-
-            while (y <= yb) {
-                markThickPoint(x, y);
-                if (y == yb) break;
-                if (d <= 0) { d += incNE; x++; }
-                else { d += incN; }
-                y++;
-            }
-        }
-        else if (absDy < absDx && dx > 0 && dy < 0) {
-            int d = absDx - 2 * absDy;
-            int incE = -2 * absDy;
-            int incSE = 2 * (absDx - absDy);
-            int x = xa, y = ya;
-
-            while (x <= xb) {
-                markThickPoint(x, y);
-                if (x == xb) break;
-                if (d <= 0) { d += incSE; y--; }
-                else { d += incE; }
-                x++;
-            }
-        }
-        else if (absDy >= absDx && dx >= 0 && dy < 0) {
-            int d = absDy - 2 * absDx;
-            int incS = -2 * absDx;
-            int incSE = 2 * (absDy - absDx);
-            int x = xa, y = ya;
-
-            while (y >= yb) {
-                markThickPoint(x, y);
-                if (y == yb) break;
-                if (d <= 0) { d += incSE; x++; }
-                else { d += incS; }
-                y--;
-            }
-        }
-        else if (dx < 0) {
-            calculateTriangleBorderLine(info, xb, yb, xa, ya, thickness);
-        }
-    }
-
-    BorderInfo calculateTriangleBorder(int x0, int y0, int x1, int y1, int x2, int y2, int thickness)
-    {
-        BorderInfo info;
-        info.scanlines.resize(height, { width, -1 });
-
-        // Marcar los tres bordes CON GROSOR
-        calculateTriangleBorderLine(info, x0, y0, x1, y1, thickness);
-        calculateTriangleBorderLine(info, x1, y1, x2, y2, thickness);
-        calculateTriangleBorderLine(info, x2, y2, x0, y0, thickness);
-
-        return info;
-    }
-
-    // Relleno de triángulo siguiendo el PDF (scanline con interpolación)
-    void drawTriangleFilled(int x0, int y0, int x1, int y1, int x2, int y2, RGBA fillColor, RGBA borderColor, int thickness)
-    {
-        // Calcular los bordes del triángulo CON GROSOR
-        BorderInfo borderInfo = calculateTriangleBorder(x0, y0, x1, y1, x2, y2, thickness);
-
-        // Encontrar el rango de y
-        int ymin = std::min({ y0, y1, y2 });
-        int ymax = std::max({ y0, y1, y2 });
-
-        // Dibujar el relleno entre los bordes
-        for (int y = ymin - thickness; y <= ymax + thickness; ++y) {
-            if (y < 0 || y >= height) continue;
-
-            auto edge = borderInfo.scanlines[y];
-            if (edge.second < 0) continue; // No hay borde en esta línea
-
-            int xmin = edge.first;
-            int xmax = edge.second;
-
-            // Ajustar para ir 1 píxel adentro del borde real
-            xmin += 1;
-            xmax -= 1;
-
-            if (xmin <= xmax) {
-                drawHorizontalLine(xmin, xmax, y, fillColor);
-            }
-        }
-
-        // Dibujar el borde
-        drawTriangle(x0, y0, x1, y1, x2, y2, borderColor, thickness);
     }
 
     void update()
@@ -656,7 +528,7 @@ public:
             shape->draw(this);
         }
 
-        // Dibujar la forma actualmente en creación si ambos puntos están definidos
+        // Dibujar la forma actualmente en creaciÃ³n si ambos puntos estÃ¡n definidos
         if (m_x0 >= 0 && m_y0 >= 0 && m_x1 >= 0 && m_y1 >= 0)
         {
             if (m_drawMode == 0) { // Line
@@ -772,7 +644,7 @@ public:
                             auto ln = std::make_unique<Line>();
                             ln->x0 = m_x0; ln->y0 = m_y0; ln->x1 = m_x1; ln->y1 = m_y1;
                             ln->borderColor = m_borderColor;
-                            ln->fillColor = m_fillColor; // No se usa en líneas
+                            ln->fillColor = m_fillColor; // No se usa en lÃ­neas
                             ln->thickness = m_lineThickness;
                             m_shapes.push_back(std::move(ln));
                         }
