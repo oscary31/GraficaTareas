@@ -14,11 +14,16 @@ private:
     int m_y0 = -1;
     int m_x1 = -1;
     int m_y1 = -1;
-    RGBA m_borderColor = { 0,0,0,255 }; // Color del borde
-    RGBA m_fillColor = { 255,255,255,255 }; // Color del relleno
+    RGBA m_borderColor = { 0,0,0,255 };
+    RGBA m_fillColor = { 255,255,255,255 };
     int m_drawMode = 0; // 0=Line,1=Ellipse,2=Rectangle,3=Triangle, 4=Bezier
-    int m_lineThickness = 1; // line thickness
+    int m_lineThickness = 1;
     bool m_useFilledShapes = false;
+
+    // Colores para los puntos de control de Bézier
+    RGBA m_controlPointColor = { 255, 119, 0, 255 };        // Naranja
+    RGBA m_selectedControlPointColor = { 0, 119, 255, 255 }; // Azul
+    RGBA m_controlPolygonColor = { 136, 136, 136, 255 };      // Gris para las líneas
 
     // Base class para todas las figuras
     struct Shape {
@@ -38,8 +43,8 @@ private:
     };
 
     struct Ellipse : public Shape {
-        int cx, cy; // center
-        int a, b; // radii
+        int cx, cy;
+        int a, b;
         void draw(CMyTest* renderer) override {
             if (filled) {
                 renderer->drawEllipseFilled(cx, cy, a, b, fillColor, borderColor, thickness);
@@ -74,6 +79,7 @@ private:
         }
     };
 
+    // Definición completa de BezierCurve
     struct BezierCurve : public Shape {
         std::vector<std::pair<int, int>> controlPoints;
 
@@ -84,21 +90,28 @@ private:
             for (size_t i = 0; i < controlPoints.size() - 1; ++i) {
                 const auto& pA = controlPoints[i];
                 const auto& pB = controlPoints[i + 1];
-                // Color de línea de control: Gris oscuro
                 renderer->drawLine(pA.first, pA.second, pB.first, pB.second,
-                    { 0x88, 0x88, 0x88, 0xFF }, 1);
+                    renderer->m_controlPolygonColor, 1);
             }
 
             // 2. Dibujar los Puntos de Control (círculos rellenos)
             int pointRadius = 5;
-            for (const auto& p : controlPoints) {
-                // Color de relleno de punto: Rojo/Naranja
+            for (size_t i = 0; i < controlPoints.size(); ++i) {
+                const auto& p = controlPoints[i];
+                RGBA pointColor = renderer->m_controlPointColor; // Usar el color de la clase
+
+                // Resaltar el punto seleccionado si estamos editando esta curva
+                if (renderer->m_editMode == 1 &&
+                    renderer->m_editingCurve == this &&
+                    (int)i == renderer->m_selectedControlPoint) {
+                    pointColor = renderer->m_selectedControlPointColor; // Usar el color de selección
+                }
+
                 renderer->drawEllipseFilled(p.first, p.second, pointRadius, pointRadius,
-                    { 0xFF, 0x77, 0x00, 0xFF }, { 0xFF, 0x77, 0x00, 0xFF }, 1);
+                    pointColor, pointColor, 1);
             }
 
             // 3. Dibujar la Curva (Algoritmo de Casteljau)
-            // Usaremos 100 segmentos para una aproximación suave
             int segments = 100;
             std::pair<int, int> p0 = renderer->deCasteljau(controlPoints, 0.0f);
 
@@ -111,7 +124,14 @@ private:
         }
     };
 
-    // Lista unificada de todas las figuras en orden de creación
+    // Para la edición de curvas Bézier
+    int m_editMode = 0; // 0=crear nueva, 1=editar existente
+    BezierCurve* m_editingCurve = nullptr;
+    int m_selectedControlPoint = -1;
+    std::pair<int, int> m_originalMousePos;
+    bool m_isDraggingControlPoint = false;
+
+    // Lista unificada de todas las figuras
     std::vector<std::unique_ptr<Shape>> m_shapes;
 
     // Temp storage for triangle clicks
@@ -119,14 +139,13 @@ private:
     int m_triTempY[3];
     int m_triClicks = 0;
 
-    int framesThisSecond = 0; // contador de frames para calcular FPS
+    int framesThisSecond = 0;
 
-    // Set para evitar dibujar el mismo píxel dos veces en una misma operación
+    // Set para evitar dibujar el mismo píxel dos veces
     std::set<std::pair<int, int>> m_drawnPixels;
 
-    // Estructura para almacenar los límites internos del triángulo sin grosor
     struct TriangleFillInfo {
-        std::vector<std::pair<int, int>> scanlines; // xmin, xmax por cada y
+        std::vector<std::pair<int, int>> scanlines;
     };
 
     // Modo 4: Bezier
@@ -137,8 +156,6 @@ public:
     CMyTest() {};
     ~CMyTest() {};
 
-    // Helper: set a thick pixel (square) centered at x,y
-    // Usa un conjunto para evitar redibujar el mismo píxel
     void setThickPixel(int x, int y, RGBA color, int thickness)
     {
         if (thickness <= 1) {
@@ -152,7 +169,6 @@ public:
                 int px = x + dx;
                 int py = y + dy;
 
-                // Solo dibujar si no hemos dibujado este píxel antes en esta operación
                 if (m_drawnPixels.find({ px, py }) == m_drawnPixels.end()) {
                     setPixel(px, py, color);
                     m_drawnPixels.insert({ px, py });
@@ -161,10 +177,8 @@ public:
         }
     }
 
-    // Algoritmo de Bresenham para dibujar líneas (con grosor)
     void drawLineBresenham(int x0, int y0, int x1, int y1, RGBA color, int thickness)
     {
-        // Limpiar el conjunto de píxeles dibujados al inicio de cada línea
         m_drawnPixels.clear();
 
         int dx = x1 - x0;
@@ -172,7 +186,6 @@ public:
         int absDx = abs(dx);
         int absDy = abs(dy);
 
-        // Caso 1: 0 <= m < 1 
         if (absDy < absDx && dx > 0 && dy >= 0)
         {
             int d = absDx - 2 * absDy;
@@ -183,20 +196,12 @@ public:
             setThickPixel(x, y, color, thickness);
             while (x < x1)
             {
-                if (d <= 0)
-                {
-                    d += incNE;
-                    y++;
-                }
-                else
-                {
-                    d += incE;
-                }
+                if (d <= 0) { d += incNE; y++; }
+                else { d += incE; }
                 x++;
                 setThickPixel(x, y, color, thickness);
             }
         }
-        // Caso 2: m >= 1 
         else if (absDy >= absDx && dx >= 0 && dy > 0)
         {
             int d = absDy - 2 * absDx;
@@ -207,20 +212,12 @@ public:
             setThickPixel(x, y, color, thickness);
             while (y < y1)
             {
-                if (d <= 0)
-                {
-                    d += incNE;
-                    x++;
-                }
-                else
-                {
-                    d += incN;
-                }
+                if (d <= 0) { d += incNE; x++; }
+                else { d += incN; }
                 y++;
                 setThickPixel(x, y, color, thickness);
             }
         }
-        // Caso 3: -1 < m <= 0 
         else if (absDy < absDx && dx > 0 && dy < 0)
         {
             int d = absDx - 2 * absDy;
@@ -231,20 +228,12 @@ public:
             setThickPixel(x, y, color, thickness);
             while (x < x1)
             {
-                if (d <= 0)
-                {
-                    d += incSE;
-                    y--;
-                }
-                else
-                {
-                    d += incE;
-                }
+                if (d <= 0) { d += incSE; y--; }
+                else { d += incE; }
                 x++;
                 setThickPixel(x, y, color, thickness);
             }
         }
-        // Caso 4: m <= -1 
         else if (absDy >= absDx && dx >= 0 && dy < 0)
         {
             int d = absDy - 2 * absDx;
@@ -255,26 +244,17 @@ public:
             setThickPixel(x, y, color, thickness);
             while (y > y1)
             {
-                if (d <= 0)
-                {
-                    d += incSE;
-                    x++;
-                }
-                else
-                {
-                    d += incS;
-                }
+                if (d <= 0) { d += incSE; x++; }
+                else { d += incS; }
                 y--;
                 setThickPixel(x, y, color, thickness);
             }
         }
-        // Casos con dx < 0
         else if (dx < 0)
         {
             drawLineBresenham(x1, y1, x0, y0, color, thickness);
         }
 
-        // Limpiar el conjunto al final
         m_drawnPixels.clear();
     }
 
@@ -283,7 +263,6 @@ public:
         drawLineBresenham(x0, y0, x1, y1, color, thickness);
     }
 
-    // Dibuja 4 puntos simétricos de la elipse centrada en (cx,cy) con grosor
     void ellipsePoints4(long long cx, long long cy, long long x, long long y, RGBA color, int thickness)
     {
         setThickPixel(static_cast<int>(cx + x), static_cast<int>(cy + y), color, thickness);
@@ -292,10 +271,8 @@ public:
         setThickPixel(static_cast<int>(cx - x), static_cast<int>(cy - y), color, thickness);
     }
 
-    // drawEllipseOutline using long long integer arithmetic (with thickness)
     void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color, int thickness)
     {
-        // Limpiar el conjunto de píxeles dibujados
         m_drawnPixels.clear();
 
         if (a <= 0 || b <= 0) return;
@@ -348,7 +325,6 @@ public:
             }
         }
 
-        // Limpiar el conjunto al final
         m_drawnPixels.clear();
     }
 
@@ -357,7 +333,6 @@ public:
         drawEllipseOutline(cx, cy, a, b, color, 1);
     }
 
-    // Draw rectangle by drawing its four edges (use drawLine with thickness)
     void drawRectangleOutline(int x0, int y0, int x1, int y1, RGBA color, int thickness)
     {
         int xmin = std::min(x0, x1);
@@ -371,7 +346,6 @@ public:
         drawLine(xmax, ymin, xmax, ymax, color, thickness);
     }
 
-    // Draw triangle by drawing three lines
     void drawTriangleOutline(int x0, int y0, int x1, int y1, int x2, int y2, RGBA color, int thickness)
     {
         drawLine(x0, y0, x1, y1, color, thickness);
@@ -379,7 +353,6 @@ public:
         drawLine(x2, y2, x0, y0, color, thickness);
     }
 
-    // Helper: draw horizontal line (internal, no thick pixels)
     void drawHorizontalLine(int x0, int x1, int y, RGBA color)
     {
         if (x0 > x1) std::swap(x0, x1);
@@ -388,7 +361,6 @@ public:
         }
     }
 
-    // Calcular límites de relleno usando líneas sin grosor
     void calculateTriangleFillLine(TriangleFillInfo& info, int xa, int ya, int xb, int yb)
     {
         int dx = xb - xa;
@@ -469,26 +441,20 @@ public:
         }
     }
 
-    // Relleno de triángulo: primero relleno, luego borde
     void drawTriangleFilled(int x0, int y0, int x1, int y1, int x2, int y2, RGBA fillColor, RGBA borderColor, int thickness)
     {
-        // Calcular los límites internos del triángulo (sin considerar grosor)
         TriangleFillInfo fillInfo;
         fillInfo.scanlines.resize(height, { width, -1 });
 
-        // Calcular las tres aristas sin grosor
         calculateTriangleFillLine(fillInfo, x0, y0, x1, y1);
         calculateTriangleFillLine(fillInfo, x1, y1, x2, y2);
         calculateTriangleFillLine(fillInfo, x2, y2, x0, y0);
 
-        // Encontrar el rango de y
         int ymin = std::min({ y0, y1, y2 });
         int ymax = std::max({ y0, y1, y2 });
 
-        // Calcular el margen interno basado en el grosor del borde
         int innerMargin = (thickness - 1) / 2 + 1;
 
-        // Dibujar el relleno, ajustando para que quede dentro del borde
         for (int y = ymin; y <= ymax; ++y) {
             if (y < 0 || y >= height) continue;
 
@@ -503,32 +469,24 @@ public:
             }
         }
 
-        // Dibujar el borde encima del relleno
         drawTriangleOutline(x0, y0, x1, y1, x2, y2, borderColor, thickness);
     }
 
-    // Relleno de elipse siguiendo el PDF
     void drawEllipseFilled(int cx, int cy, int a, int b, RGBA fillColor, RGBA borderColor, int thickness)
     {
         if (a <= 0 || b <= 0) return;
 
-        // Primero dibujar el borde completo
         drawEllipseOutline(cx, cy, a, b, borderColor, thickness);
 
-        // Calcular cuánto del grosor del borde se adentra hacia el interior
         int innerMargin = (thickness - 1) / 2;
-
-        // Reducir los radios para el relleno, considerando que el borde ocupa espacio hacia adentro
         int innerA = a - innerMargin - 1;
         int innerB = b - innerMargin - 1;
 
-        if (innerA <= 0 || innerB <= 0) return; // No hay espacio para rellenar
+        if (innerA <= 0 || innerB <= 0) return;
 
-        // Rellenar el área interior de la elipse
         for (int y = cy - innerB; y <= cy + innerB; ++y) {
             if (y < 0 || y >= height) continue;
 
-            // Calcular los límites horizontales usando la ecuación de la elipse interior
             float y_rel = static_cast<float>(y - cy) / innerB;
             float x_width = innerA * std::sqrt(1.0f - y_rel * y_rel);
             int x_start = static_cast<int>(cx - x_width);
@@ -542,8 +500,6 @@ public:
         }
     }
 
-
-    // Relleno de rectángulo siguiendo el PDF
     void drawRectangleFilled(int x0, int y0, int x1, int y1, RGBA fillColor, RGBA borderColor, int thickness)
     {
         int xmin = std::min(x0, x1);
@@ -551,19 +507,14 @@ public:
         int ymin = std::min(y0, y1);
         int ymax = std::max(y0, y1);
 
-        // Primero dibujar el borde completo
         drawRectangleOutline(xmin, ymin, xmax, ymax, borderColor, thickness);
 
-        // Calcular cuánto del grosor del borde se adentra hacia el interior
         int innerMargin = (thickness - 1) / 2;
-
-        // Ajustar para que el relleno empiece DESPUÉS de la parte interior del borde
         int innerXmin = xmin + innerMargin + 1;
         int innerXmax = xmax - innerMargin - 1;
         int innerYmin = ymin + innerMargin + 1;
         int innerYmax = ymax - innerMargin - 1;
 
-        // Solo rellenar si hay espacio interior después de considerar el borde
         if (innerXmin <= innerXmax && innerYmin <= innerYmax) {
             for (int y = innerYmin; y <= innerYmax; ++y) {
                 drawHorizontalLine(innerXmin, innerXmax, y, fillColor);
@@ -571,18 +522,15 @@ public:
         }
     }
 
-	// Algoritmo de De Casteljau para curvas Bézier
     std::pair<int, int> deCasteljau(const std::vector<std::pair<int, int>>& points, float t) {
         if (points.empty()) return { 0, 0 };
 
-        // Copiar puntos a flotantes para el cálculo
         std::vector<std::pair<float, float>> temp(points.size());
         for (size_t i = 0; i < points.size(); ++i) {
             temp[i] = { static_cast<float>(points[i].first),
                        static_cast<float>(points[i].second) };
         }
 
-        // Algoritmo de De Casteljau
         int n = temp.size() - 1;
         for (int k = 1; k <= n; ++k) {
             for (int i = 0; i <= n - k; ++i) {
@@ -594,41 +542,66 @@ public:
         return { static_cast<int>(temp[0].first), static_cast<int>(temp[0].second) };
     }
 
-    // Función auxiliar para la previsualización (mismo algoritmo)
     std::pair<int, int> deCasteljauTemp(const std::vector<std::pair<int, int>>& points, float t) {
         return deCasteljau(points, t);
     }
 
+    BezierCurve* findBezierCurveNear(int x, int y, int& controlPointIndex) {
+        controlPointIndex = -1;
+        const int TOLERANCE = 15;
+
+        for (auto it = m_shapes.rbegin(); it != m_shapes.rend(); ++it) {
+            BezierCurve* bezier = dynamic_cast<BezierCurve*>(it->get());
+            if (bezier) {
+                for (size_t i = 0; i < bezier->controlPoints.size(); ++i) {
+                    const auto& p = bezier->controlPoints[i];
+                    int dx = p.first - x;
+                    int dy = p.second - y;
+                    if (dx * dx + dy * dy <= TOLERANCE * TOLERANCE) {
+                        controlPointIndex = i;
+                        return bezier;
+                    }
+                }
+
+                int segments = 50;
+                for (int j = 0; j <= segments; ++j) {
+                    float t = (float)j / segments;
+                    std::pair<int, int> p = deCasteljau(bezier->controlPoints, t);
+                    int dx = p.first - x;
+                    int dy = p.second - y;
+                    if (dx * dx + dy * dy <= TOLERANCE * TOLERANCE) {
+                        controlPointIndex = -1;
+                        return bezier;
+                    }
+                }
+            }
+        }
+        return nullptr;
+    }
+
     void update()
     {
-        // Fondo gris #C9C9C9 (201,201,201) opaco
         std::fill(m_buffer.begin(), m_buffer.end(), RGBA{ 201,201,201,255 });
         framesThisSecond++;
 
-        // Dibujar todas las figuras en el orden en que fueron creadas
         for (const auto& shape : m_shapes) {
             shape->draw(this);
         }
-        // Previsualización de la curva Bézier en construcción
-        if (m_drawMode == 4) {
-            // Dibujar el polígono de control temporal
+
+        if (m_drawMode == 4 && m_editMode == 0) {
             for (size_t i = 0; i < m_tempControlPoints.size(); ++i) {
                 const auto& p = m_tempControlPoints[i];
-                // Línea de control al punto siguiente (si existe)
                 if (i < m_tempControlPoints.size() - 1) {
                     const auto& pNext = m_tempControlPoints[i + 1];
                     drawLine(p.first, p.second, pNext.first, pNext.second,
-                        { 0x88, 0x88, 0x88, 0xFF }, 1);
+                        m_controlPolygonColor, 1);
                 }
-                // Dibujar el punto de control
                 drawEllipseFilled(p.first, p.second, m_bezierControlPointRadius,
                     m_bezierControlPointRadius,
-                    { 0xFF, 0x77, 0x00, 0xFF }, { 0xFF, 0x77, 0x00, 0xFF }, 1);
+                    m_controlPointColor, m_controlPointColor, 1);
             }
 
-            // Dibujar línea temporal desde el último punto al cursor (similar al triángulo)
             if (!m_tempControlPoints.empty()) {
-                // Obtener la posición actual del mouse
                 double xpos_d, ypos_d;
                 glfwGetCursorPos(m_window, &xpos_d, &ypos_d);
                 int cx = static_cast<int>(xpos_d);
@@ -636,15 +609,13 @@ public:
 
                 const auto& lastPoint = m_tempControlPoints.back();
                 drawLine(lastPoint.first, lastPoint.second, cx, cy,
-                    { 0x88, 0x88, 0x88, 0x88 }, 1); // Color gris semitransparente
+                    m_controlPolygonColor, 1);
 
-                // También dibujar un punto temporal en la posición del cursor
                 drawEllipseFilled(cx, cy, m_bezierControlPointRadius / 2,
                     m_bezierControlPointRadius / 2,
-                    { 0x88, 0x88, 0x88, 0x88 }, { 0x88, 0x88, 0x88, 0x88 }, 1);
+                    m_controlPolygonColor, m_controlPolygonColor, 1);
             }
 
-            // Dibujar la curva incompleta (si hay al menos 2 puntos)
             if (m_tempControlPoints.size() >= 2) {
                 int segments = 100;
                 std::pair<int, int> p0 = deCasteljauTemp(m_tempControlPoints, 0.0f);
@@ -658,41 +629,36 @@ public:
             }
         }
 
-
-        // Dibujar la forma actualmente en creación si ambos puntos están definidos
         if (m_x0 >= 0 && m_y0 >= 0 && m_x1 >= 0 && m_y1 >= 0)
         {
-            if (m_drawMode == 0) { // Line
+            if (m_drawMode == 0) {
                 drawLine(m_x0, m_y0, m_x1, m_y1, m_borderColor, m_lineThickness);
             }
-            else if (m_drawMode == 1) { // Ellipse
+            else if (m_drawMode == 1) {
                 int a = std::abs(m_x1 - m_x0);
                 int b = std::abs(m_y1 - m_y0);
-                if (m_useFilledShapes) { // <-- ¡NUEVA LÓGICA DE PREVISUALIZACIÓN!
+                if (m_useFilledShapes) {
                     drawEllipseFilled(m_x0, m_y0, a, b, m_fillColor, m_borderColor, m_lineThickness);
                 }
                 else {
                     drawEllipseOutline(m_x0, m_y0, a, b, m_borderColor, m_lineThickness);
                 }
             }
-            else if (m_drawMode == 2) { // Rectangle
-                if (m_useFilledShapes) { // <-- ¡NUEVA LÓGICA DE PREVISUALIZACIÓN!
+            else if (m_drawMode == 2) {
+                if (m_useFilledShapes) {
                     drawRectangleFilled(m_x0, m_y0, m_x1, m_y1, m_fillColor, m_borderColor, m_lineThickness);
                 }
                 else {
                     drawRectangleOutline(m_x0, m_y0, m_x1, m_y1, m_borderColor, m_lineThickness);
                 }
             }
-            else if (m_drawMode == 3) { // Triangle preview
+            else if (m_drawMode == 3) {
                 if (m_triClicks == 1) {
                     drawLine(m_triTempX[0], m_triTempY[0], m_x1, m_y1, m_borderColor, m_lineThickness);
                 }
-
             }
-
         }
         else {
-            // For triangle mode, preview with current mouse position
             if (m_drawMode == 3 && m_triClicks > 0) {
                 double xpos_d, ypos_d;
                 glfwGetCursorPos(m_window, &xpos_d, &ypos_d);
@@ -702,7 +668,7 @@ public:
                     drawLine(m_triTempX[0], m_triTempY[0], cx, cy, m_borderColor, m_lineThickness);
                 }
                 else if (m_triClicks == 2) {
-                    if (m_useFilledShapes) { // <-- ¡NUEVA LÓGICA DE PREVISUALIZACIÓN!
+                    if (m_useFilledShapes) {
                         drawTriangleFilled(m_triTempX[0], m_triTempY[0], m_triTempX[1], m_triTempY[1], cx, cy, m_fillColor, m_borderColor, m_lineThickness);
                     }
                     else {
@@ -720,6 +686,15 @@ public:
             std::cout << "Key " << key << " pressed\n";
             if (key == GLFW_KEY_ESCAPE)
                 glfwSetWindowShouldClose(m_window, GLFW_TRUE);
+
+            // Tecla E para cambiar entre modo crear/editar
+            if (key == GLFW_KEY_E && m_drawMode == 4) {
+                m_editMode = (m_editMode == 0) ? 1 : 0;
+                m_editingCurve = nullptr;
+                m_selectedControlPoint = -1;
+                m_tempControlPoints.clear();
+                std::cout << "Edit mode: " << (m_editMode == 0 ? "Create" : "Edit") << "\n";
+            }
         }
         else if (action == GLFW_RELEASE)
             std::cout << "Key " << key << " released\n";
@@ -736,25 +711,73 @@ public:
         {
             double xpos, ypos;
             glfwGetCursorPos(m_window, &xpos, &ypos);
+            int tx = static_cast<int>(xpos);
+            int ty = height - 1 - static_cast<int>(ypos);
 
             if (action == GLFW_PRESS)
             {
                 mouseButtonsDown[button] = true;
 
-                if (m_drawMode < 3) { // Line/Ellipse/Rectangle: start drag
+                if (m_drawMode == 4) { // Bezier mode
+                    if (m_editMode == 0) { // Modo crear
+                        if (button == 0) {
+                            m_tempControlPoints.push_back({ tx, ty });
+                            std::cout << "Added control point (" << tx << ", " << ty
+                                << "). Total: " << m_tempControlPoints.size() << "\n";
+                        }
+                        else if (button == 1) {
+                            if (m_tempControlPoints.size() >= 2) {
+                                auto bz = std::make_unique<BezierCurve>();
+                                bz->controlPoints = m_tempControlPoints;
+                                bz->borderColor = m_borderColor;
+                                bz->fillColor = m_fillColor;
+                                bz->thickness = m_lineThickness;
+                                bz->filled = false;
+                                m_shapes.push_back(std::move(bz));
+                                std::cout << "Bezier Curve finalized with "
+                                    << m_tempControlPoints.size() << " points.\n";
+                                m_tempControlPoints.clear();
+                            }
+                            else {
+                                std::cout << "Need at least 2 points to finalize a Bezier Curve.\n";
+                            }
+                        }
+                        else if (button == 2) {
+                            m_tempControlPoints.clear();
+                            std::cout << "Bezier Curve canceled.\n";
+                        }
+                    }
+                    else if (m_editMode == 1) { // Modo editar
+                        if (button == 0) {
+                            int cpIndex;
+                            BezierCurve* curve = findBezierCurveNear(tx, ty, cpIndex);
+                            if (curve && cpIndex >= 0) {
+                                m_editingCurve = curve;
+                                m_selectedControlPoint = cpIndex;
+                                m_isDraggingControlPoint = true;
+                                m_originalMousePos = { tx, ty };
+                                std::cout << "Selected control point " << cpIndex << "\n";
+                            }
+                            else if (curve && cpIndex < 0) {
+                                m_editingCurve = curve;
+                                m_selectedControlPoint = -1;
+                                std::cout << "Selected entire curve\n";
+                            }
+                        }
+                    }
+                }
+                else if (m_drawMode < 3) {
                     if (button == 0)
                     {
-                        m_x0 = static_cast<int>(xpos);
-                        m_y0 = height - 1 - static_cast<int>(ypos);
+                        m_x0 = tx;
+                        m_y0 = ty;
                         m_x1 = m_x0;
                         m_y1 = m_y0;
                         std::cout << "Inicio de figura en (" << m_x0 << ", " << m_y0 << ")\n";
                     }
                 }
-                else if (m_drawMode == 3) { // Triangle: use clicks to set vertices
+                else if (m_drawMode == 3) {
                     if (button == 0) {
-                        int tx = static_cast<int>(xpos);
-                        int ty = height - 1 - static_cast<int>(ypos);
                         if (m_triClicks < 3) {
                             m_triTempX[m_triClicks] = tx;
                             m_triTempY[m_triClicks] = ty;
@@ -769,42 +792,11 @@ public:
                             tr->borderColor = m_borderColor;
                             tr->fillColor = m_fillColor;
                             tr->thickness = m_lineThickness;
-                            tr->filled = m_useFilledShapes; // <-- ¡ESTE ES EL CAMBIO CLAVE!
+                            tr->filled = m_useFilledShapes;
                             m_shapes.push_back(std::move(tr));
                             m_triClicks = 0;
                             std::cout << "Triangle finalized.\n";
                         }
-                    }
-                }
-                else if (m_drawMode == 4) { // Bezier curve mode
-                    int tx = static_cast<int>(xpos);
-                    int ty = height - 1 - static_cast<int>(ypos);
-
-                    if (button == 0) { // Clic izquierdo: Añadir punto de control
-                        m_tempControlPoints.push_back({ tx, ty });
-                        std::cout << "Added control point (" << tx << ", " << ty
-                            << "). Total: " << m_tempControlPoints.size() << "\n";
-                    }
-                    else if (button == 1) { // Clic derecho: Finalizar curva
-                        if (m_tempControlPoints.size() >= 2) {
-                            auto bz = std::make_unique<BezierCurve>();
-                            bz->controlPoints = m_tempControlPoints;
-                            bz->borderColor = m_borderColor;
-                            bz->fillColor = m_fillColor;
-                            bz->thickness = m_lineThickness;
-                            bz->filled = false;
-                            m_shapes.push_back(std::move(bz));
-                            std::cout << "Bezier Curve finalized with "
-                                << m_tempControlPoints.size() << " points.\n";
-                            m_tempControlPoints.clear();
-                        }
-                        else {
-                            std::cout << "Need at least 2 points to finalize a Bezier Curve.\n";
-                        }
-                    }
-                    else if (button == 2) { // Clic medio: Cancelar curva actual
-                        m_tempControlPoints.clear();
-                        std::cout << "Bezier Curve canceled.\n";
                     }
                 }
             }
@@ -812,34 +804,36 @@ public:
             {
                 mouseButtonsDown[button] = false;
 
-                if (m_drawMode != 3 && m_drawMode != 4) {
+                if (m_drawMode == 4 && m_editMode == 1 && button == 0) {
+                    m_isDraggingControlPoint = false;
+                }
+                else if (m_drawMode != 3 && m_drawMode != 4) {
                     if (button == 0)
                     {
-                        m_x1 = static_cast<int>(xpos);
-                        m_y1 = height - 1 - static_cast<int>(ypos);
+                        m_x1 = tx;
+                        m_y1 = ty;
                         std::cout << "Figura finalizada en (" << m_x1 << ", " << m_y1 << ")\n";
 
-                        if (m_drawMode == 0) { // Line
+                        if (m_drawMode == 0) {
                             auto ln = std::make_unique<Line>();
                             ln->x0 = m_x0; ln->y0 = m_y0; ln->x1 = m_x1; ln->y1 = m_y1;
                             ln->borderColor = m_borderColor;
                             ln->fillColor = m_fillColor;
                             ln->thickness = m_lineThickness;
-                            // Lineas no tienen relleno visible en el código, pero por consistencia:
-                            ln->filled = m_useFilledShapes; // <-- Añadido para consistencia, aunque no afecta.
+                            ln->filled = m_useFilledShapes;
                             m_shapes.push_back(std::move(ln));
                         }
-                        else if (m_drawMode == 1) { // Ellipse
+                        else if (m_drawMode == 1) {
                             auto el = std::make_unique<Ellipse>();
                             el->cx = m_x0; el->cy = m_y0;
                             el->a = std::abs(m_x1 - m_x0); el->b = std::abs(m_y1 - m_y0);
                             el->borderColor = m_borderColor;
                             el->fillColor = m_fillColor;
                             el->thickness = m_lineThickness;
-                            el->filled = m_useFilledShapes; // <-- ¡ESTE ES EL CAMBIO CLAVE!
+                            el->filled = m_useFilledShapes;
                             m_shapes.push_back(std::move(el));
                         }
-                        else if (m_drawMode == 2) { // Rectangle
+                        else if (m_drawMode == 2) {
                             auto rc = std::make_unique<Rectangle>();
                             rc->xmin = std::min(m_x0, m_x1);
                             rc->xmax = std::max(m_x0, m_x1);
@@ -848,7 +842,7 @@ public:
                             rc->borderColor = m_borderColor;
                             rc->fillColor = m_fillColor;
                             rc->thickness = m_lineThickness;
-                            rc->filled = m_useFilledShapes; // <-- ¡ESTE ES EL CAMBIO CLAVE!
+                            rc->filled = m_useFilledShapes;
                             m_shapes.push_back(std::move(rc));
                         }
 
@@ -869,7 +863,11 @@ public:
         int xpos = static_cast<int>(xpos_d);
         int ypos = height - 1 - static_cast<int>(ypos_d);
 
-        if (m_drawMode != 3) {
+        // Edición de curvas Bézier
+        if (m_drawMode == 4 && m_editMode == 1 && m_isDraggingControlPoint && m_editingCurve && m_selectedControlPoint >= 0) {
+            m_editingCurve->controlPoints[m_selectedControlPoint] = { xpos, ypos };
+        }
+        else if (m_drawMode != 3) {
             if (mouseButtonsDown[0])
             {
                 m_x1 = xpos;
@@ -897,15 +895,12 @@ public:
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
         ImGui::Begin("Control Panel", nullptr, panelFlags);
 
-        const char* modes[] = { "Line", "Ellipse", "Rectangle", "Triangle", "Bezier Curve"};
+        const char* modes[] = { "Line", "Ellipse", "Rectangle", "Triangle", "Bezier Curve" };
         ImGui::Text("Draw Mode:");
         ImGui::ListBox("##mode", &m_drawMode, modes, IM_ARRAYSIZE(modes), 5);
 
-        
-
         if (m_drawMode > 0 && m_drawMode < 4)
         {
-            // Checkbox para elegir el relleno o solo borde
             ImGui::Checkbox("Draw Filled Shapes", &m_useFilledShapes);
             ImGui::SameLine();
             ImGui::TextDisabled("(tip)");
@@ -918,28 +913,88 @@ public:
             }
         }
 
-
         if (m_drawMode == 3) {
             ImGui::Separator();
             ImGui::TextWrapped("Triangle mode: click three times to place the three vertices. Current clicks: %d", m_triClicks);
             if (ImGui::Button("Reset Triangle Clicks")) m_triClicks = 0;
         }
 
-        // Instrucciones para Bézier
         if (m_drawMode == 4) {
             ImGui::Separator();
             ImGui::TextWrapped("Bezier Curve mode:");
-            ImGui::TextWrapped("- Clic izquierdo: agrega punto de control");
-            ImGui::TextWrapped("- Clic derecho: finalizar curva");
-            ImGui::Text("Puntos actuales: %d", (int)m_tempControlPoints.size());
-            
+
+            const char* editModes[] = { "Create", "Edit" };
+            ImGui::Text("Mode:");
+            ImGui::RadioButton("Create", &m_editMode, 0); ImGui::SameLine();
+            ImGui::RadioButton("Edit", &m_editMode, 1);
+
+            // Controles de color para los puntos de control de Bézier
+            ImGui::Separator();
+            ImGui::Text("Control Point Colors:");
+
+            float controlPointCol[4] = {
+                m_controlPointColor.r / 255.0f,
+                m_controlPointColor.g / 255.0f,
+                m_controlPointColor.b / 255.0f,
+                m_controlPointColor.a / 255.0f
+            };
+            if (ImGui::ColorEdit4("Normal Point", controlPointCol)) {
+                m_controlPointColor.r = static_cast<unsigned char>(controlPointCol[0] * 255.0f);
+                m_controlPointColor.g = static_cast<unsigned char>(controlPointCol[1] * 255.0f);
+                m_controlPointColor.b = static_cast<unsigned char>(controlPointCol[2] * 255.0f);
+                m_controlPointColor.a = static_cast<unsigned char>(controlPointCol[3] * 255.0f);
+            }
+
+            float selectedControlPointCol[4] = {
+                m_selectedControlPointColor.r / 255.0f,
+                m_selectedControlPointColor.g / 255.0f,
+                m_selectedControlPointColor.b / 255.0f,
+                m_selectedControlPointColor.a / 255.0f
+            };
+            if (ImGui::ColorEdit4("Selected Point", selectedControlPointCol)) {
+                m_selectedControlPointColor.r = static_cast<unsigned char>(selectedControlPointCol[0] * 255.0f);
+                m_selectedControlPointColor.g = static_cast<unsigned char>(selectedControlPointCol[1] * 255.0f);
+                m_selectedControlPointColor.b = static_cast<unsigned char>(selectedControlPointCol[2] * 255.0f);
+                m_selectedControlPointColor.a = static_cast<unsigned char>(selectedControlPointCol[3] * 255.0f);
+            }
+
+            float controlPolygonCol[4] = {
+                m_controlPolygonColor.r / 255.0f,
+                m_controlPolygonColor.g / 255.0f,
+                m_controlPolygonColor.b / 255.0f,
+                m_controlPolygonColor.a / 255.0f
+            };
+            if (ImGui::ColorEdit4("Polygon Lines", controlPolygonCol)) {
+                m_controlPolygonColor.r = static_cast<unsigned char>(controlPolygonCol[0] * 255.0f);
+                m_controlPolygonColor.g = static_cast<unsigned char>(controlPolygonCol[1] * 255.0f);
+                m_controlPolygonColor.b = static_cast<unsigned char>(controlPolygonCol[2] * 255.0f);
+                m_controlPolygonColor.a = static_cast<unsigned char>(controlPolygonCol[3] * 255.0f);
+            }
+
+            ImGui::Separator();
+
+            if (m_editMode == 0) {
+                ImGui::TextWrapped("- Left click: add control point");
+                ImGui::TextWrapped("- Right click: finalize curve");
+                ImGui::TextWrapped("- Middle click: cancel");
+                ImGui::Text("Control points: %d", (int)m_tempControlPoints.size());
+            }
+            else {
+                ImGui::TextWrapped("- Click on a control point to drag it");
+                ImGui::TextWrapped("- Press E to toggle between Create/Edit modes");
+                if (m_editingCurve) {
+                    ImGui::Text("Editing curve with %d points", (int)m_editingCurve->controlPoints.size());
+                    if (m_selectedControlPoint >= 0) {
+                        ImGui::Text("Selected point: %d", m_selectedControlPoint);
+                    }
+                }
+            }
         }
 
         ImGui::Separator();
         ImGui::SliderInt("Line Thickness", &m_lineThickness, 1, 31);
         ImGui::Separator();
 
-        // Color del borde
         float borderCol[4] = {
             m_borderColor.r / 255.0f,
             m_borderColor.g / 255.0f,
@@ -953,7 +1008,6 @@ public:
             m_borderColor.a = static_cast<unsigned char>(borderCol[3] * 255.0f);
         }
 
-        // Color del relleno
         float fillCol[4] = {
             m_fillColor.r / 255.0f,
             m_fillColor.g / 255.0f,
@@ -972,6 +1026,8 @@ public:
             m_shapes.clear();
             m_triClicks = 0;
             m_tempControlPoints.clear();
+            m_editingCurve = nullptr;
+            m_selectedControlPoint = -1;
         }
 
         ImGui::End();
