@@ -271,7 +271,7 @@ public:
         setThickPixel(static_cast<int>(cx - x), static_cast<int>(cy - y), color, thickness);
     }
 
-    void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color, int thickness)
+    void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color, int thickness=1)
     {
         m_drawnPixels.clear();
 
@@ -325,12 +325,7 @@ public:
             }
         }
 
-        m_drawnPixels.clear();
-    }
-
-    void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color)
-    {
-        drawEllipseOutline(cx, cy, a, b, color, 1);
+        //m_drawnPixels.clear();
     }
 
     void drawRectangleOutline(int x0, int y0, int x1, int y1, RGBA color, int thickness)
@@ -476,24 +471,32 @@ public:
     {
         if (a <= 0 || b <= 0) return;
 
+        // Primero dibujamos el borde - m_drawnPixels se llena automáticamente
         drawEllipseOutline(cx, cy, a, b, borderColor, thickness);
 
-        int innerMargin = (thickness - 1) / 2;
-        int innerA = a - innerMargin - 1;
-        int innerB = b - innerMargin - 1;
+        // Guardamos TODOS los píxeles del borde (incluyendo los que crecen hacia adentro)
+        std::set<std::pair<int, int>> borderPixels = m_drawnPixels;
+        m_drawnPixels.clear();
 
-        if (innerA <= 0 || innerB <= 0) return;
+        // Ahora rellenamos, usando un radio generoso
+        int searchRadius = a + b; // Radio de búsqueda
 
-        for (int y = cy - innerB; y <= cy + innerB; ++y) {
+        for (int y = cy - searchRadius; y <= cy + searchRadius; ++y) {
             if (y < 0 || y >= height) continue;
 
-            float y_rel = static_cast<float>(y - cy) / innerB;
-            float x_width = innerA * std::sqrt(1.0f - y_rel * y_rel);
-            int x_start = static_cast<int>(cx - x_width);
-            int x_end = static_cast<int>(cx + x_width);
+            for (int x = cx - searchRadius; x <= cx + searchRadius; ++x) {
+                if (x < 0 || x >= width) continue;
 
-            if (x_start <= x_end) {
-                for (int x = x_start; x <= x_end; ++x) {
+                // Si el píxel está en el borde (incluyendo thickness), saltarlo
+                if (borderPixels.find({ x, y }) != borderPixels.end()) {
+                    continue;
+                }
+
+                // Verificar si está dentro de la elipse
+                float dx = static_cast<float>(x - cx) / static_cast<float>(a);
+                float dy = static_cast<float>(y - cy) / static_cast<float>(b);
+
+                if (dx * dx + dy * dy <= 1.0f) {
                     setPixel(x, y, fillColor);
                 }
             }
