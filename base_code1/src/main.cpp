@@ -255,7 +255,7 @@ public:
             drawLineBresenham(x1, y1, x0, y0, color, thickness);
         }
 
-        m_drawnPixels.clear();
+        //m_drawnPixels.clear();
     }
 
     void drawLine(int x0, int y0, int x1, int y1, RGBA color, int thickness = 1)
@@ -356,115 +356,65 @@ public:
         }
     }
 
-    void calculateTriangleFillLine(TriangleFillInfo& info, int xa, int ya, int xb, int yb)
-    {
-        int dx = xb - xa;
-        int dy = yb - ya;
-        int absDx = abs(dx);
-        int absDy = abs(dy);
-
-        if (absDy < absDx && dx > 0 && dy >= 0) {
-            int d = absDx - 2 * absDy;
-            int incE = -2 * absDy;
-            int incNE = 2 * (absDx - absDy);
-            int x = xa, y = ya;
-
-            while (x <= xb) {
-                if (y >= 0 && y < (int)info.scanlines.size()) {
-                    info.scanlines[y].first = std::min(info.scanlines[y].first, x);
-                    info.scanlines[y].second = std::max(info.scanlines[y].second, x);
-                }
-                if (x == xb) break;
-                if (d <= 0) { d += incNE; y++; }
-                else { d += incE; }
-                x++;
-            }
-        }
-        else if (absDy >= absDx && dx >= 0 && dy > 0) {
-            int d = absDy - 2 * absDx;
-            int incN = -2 * absDx;
-            int incNE = 2 * (absDy - absDx);
-            int x = xa, y = ya;
-
-            while (y <= yb) {
-                if (y >= 0 && y < (int)info.scanlines.size()) {
-                    info.scanlines[y].first = std::min(info.scanlines[y].first, x);
-                    info.scanlines[y].second = std::max(info.scanlines[y].second, x);
-                }
-                if (y == yb) break;
-                if (d <= 0) { d += incNE; x++; }
-                else { d += incN; }
-                y++;
-            }
-        }
-        else if (absDy < absDx && dx > 0 && dy < 0) {
-            int d = absDx - 2 * absDy;
-            int incE = -2 * absDy;
-            int incSE = 2 * (absDx - absDy);
-            int x = xa, y = ya;
-
-            while (x <= xb) {
-                if (y >= 0 && y < (int)info.scanlines.size()) {
-                    info.scanlines[y].first = std::min(info.scanlines[y].first, x);
-                    info.scanlines[y].second = std::max(info.scanlines[y].second, x);
-                }
-                if (x == xb) break;
-                if (d <= 0) { d += incSE; y--; }
-                else { d += incE; }
-                x++;
-            }
-        }
-        else if (absDy >= absDx && dx >= 0 && dy < 0) {
-            int d = absDy - 2 * absDx;
-            int incS = -2 * absDx;
-            int incSE = 2 * (absDy - absDx);
-            int x = xa, y = ya;
-
-            while (y >= yb) {
-                if (y >= 0 && y < (int)info.scanlines.size()) {
-                    info.scanlines[y].first = std::min(info.scanlines[y].first, x);
-                    info.scanlines[y].second = std::max(info.scanlines[y].second, x);
-                }
-                if (y == yb) break;
-                if (d <= 0) { d += incSE; x++; }
-                else { d += incS; }
-                y--;
-            }
-        }
-        else if (dx < 0) {
-            calculateTriangleFillLine(info, xb, yb, xa, ya);
-        }
-    }
-
     void drawTriangleFilled(int x0, int y0, int x1, int y1, int x2, int y2, RGBA fillColor, RGBA borderColor, int thickness)
     {
-        TriangleFillInfo fillInfo;
-        fillInfo.scanlines.resize(height, { width, -1 });
+        // Variable auxiliar para acumular los píxeles del borde
+        std::set<std::pair<int, int>> borderPixels;
 
-        calculateTriangleFillLine(fillInfo, x0, y0, x1, y1);
-        calculateTriangleFillLine(fillInfo, x1, y1, x2, y2);
-        calculateTriangleFillLine(fillInfo, x2, y2, x0, y0);
+        // Dibujamos cada línea y acumulamos sus píxeles
+        // Línea 1: (x0,y0) -> (x1,y1)
+        m_drawnPixels.clear();
+        drawLine(x0, y0, x1, y1, borderColor, thickness);
+        borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
 
+        // Línea 2: (x1,y1) -> (x2,y2)
+        m_drawnPixels.clear();
+        drawLine(x1, y1, x2, y2, borderColor, thickness);
+        borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
+
+        // Línea 3: (x2,y2) -> (x0,y0)
+        m_drawnPixels.clear();
+        drawLine(x2, y2, x0, y0, borderColor, thickness);
+        borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
+
+        m_drawnPixels.clear();
+
+        // Función para verificar si un punto está dentro del triángulo
+        auto isInsideTriangle = [](int px, int py, int x0, int y0, int x1, int y1, int x2, int y2) -> bool {
+            auto sign = [](int px, int py, int ax, int ay, int bx, int by) -> float {
+                return (px - bx) * (ay - by) - (ax - bx) * (py - by);
+                };
+
+            float d1 = sign(px, py, x0, y0, x1, y1);
+            float d2 = sign(px, py, x1, y1, x2, y2);
+            float d3 = sign(px, py, x2, y2, x0, y0);
+
+            bool has_neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            bool has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+
+            return !(has_neg && has_pos);
+            };
+
+        // Calculamos el bounding box del triángulo
+        int xmin = std::min({ x0, x1, x2 });
+        int xmax = std::max({ x0, x1, x2 });
         int ymin = std::min({ y0, y1, y2 });
         int ymax = std::max({ y0, y1, y2 });
 
-        int innerMargin = (thickness - 1) / 2 + 1;
-
+        // Rellenamos solo los píxeles que están dentro y NO en el borde
         for (int y = ymin; y <= ymax; ++y) {
             if (y < 0 || y >= height) continue;
 
-            auto edge = fillInfo.scanlines[y];
-            if (edge.second < 0) continue;
+            for (int x = xmin; x <= xmax; ++x) {
+                if (x < 0 || x >= width) continue;
 
-            int xmin = edge.first + innerMargin;
-            int xmax = edge.second - innerMargin;
-
-            if (xmin <= xmax) {
-                drawHorizontalLine(xmin, xmax, y, fillColor);
+                // Si está dentro del triángulo y NO está en el borde
+                if (isInsideTriangle(x, y, x0, y0, x1, y1, x2, y2) &&
+                    borderPixels.find({ x, y }) == borderPixels.end()) {
+                    setPixel(x, y, fillColor);
+                }
             }
         }
-
-        drawTriangleOutline(x0, y0, x1, y1, x2, y2, borderColor, thickness);
     }
 
     void drawEllipseFilled(int cx, int cy, int a, int b, RGBA fillColor, RGBA borderColor, int thickness)
