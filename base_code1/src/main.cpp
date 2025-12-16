@@ -648,6 +648,12 @@ public:
                 m_tempControlPoints.clear();
                 std::cout << "Edit mode: " << (m_editMode == 0 ? "Create" : "Edit") << "\n";
             }
+
+			// Tecla Espacio para cancelar la creación de la curva Bezier
+            if (key == GLFW_KEY_SPACE && m_drawMode == 4 && m_editMode == 0) {
+                m_tempControlPoints.clear();
+                std::cout << "Bezier Curve creation canceled.\n";
+			}
         }
         else if (action == GLFW_RELEASE)
             std::cout << "Key " << key << " released\n";
@@ -929,7 +935,7 @@ public:
             if (m_editMode == 0) {
                 ImGui::TextWrapped("- Left click: add control point");
                 ImGui::TextWrapped("- Right click: finalize curve");
-                ImGui::TextWrapped("- Middle click: cancel");
+                ImGui::TextWrapped("- Space click: cancel curve");
                 ImGui::Text("Control points: %d", (int)m_tempControlPoints.size());
             }
             else {
