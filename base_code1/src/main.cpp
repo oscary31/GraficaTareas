@@ -20,10 +20,11 @@ private:
     int m_lineThickness = 1;
     bool m_useFilledShapes = false;
 
-    // Colores para los puntos de control de Bézier
+    // Colores para los puntos de control de Bézier y selección
     RGBA m_controlPointColor = { 255, 119, 0, 255 };        // Naranja
     RGBA m_selectedControlPointColor = { 0, 119, 255, 255 }; // Azul
     RGBA m_controlPolygonColor = { 136, 136, 136, 255 };      // Gris para las líneas
+    RGBA m_selectionHandleColor = { 0, 255, 255, 255 };       // Cyan para handles
 
     // Base class para todas las figuras
     struct Shape {
@@ -33,12 +34,44 @@ private:
         bool filled;
         virtual ~Shape() = default;
         virtual void draw(CMyTest* renderer) = 0;
+
+        // Nuevos métodos para edición y selección
+        virtual std::vector<std::pair<int, int>> getControlPoints() { return {}; }
+        virtual void setControlPoint(int idx, int x, int y) {}
+        virtual void moveBy(int dx, int dy) {}
+        virtual bool containsPoint(int x, int y) { return false; }
     };
 
     struct Line : public Shape {
         int x0, y0, x1, y1;
         void draw(CMyTest* renderer) override {
             renderer->drawLine(x0, y0, x1, y1, borderColor, thickness);
+        }
+        std::vector<std::pair<int, int>> getControlPoints() override {
+            return { {x0,y0}, {x1,y1} };
+        }
+        void setControlPoint(int idx, int x, int y) override {
+            if (idx == 0) { x0 = x; y0 = y; }
+            else if (idx == 1) { x1 = x; y1 = y; }
+        }
+        void moveBy(int dx, int dy) override {
+            x0 += dx; y0 += dy; x1 += dx; y1 += dy;
+        }
+        bool containsPoint(int x, int y) override {
+            // distancia punto-segmento
+            auto dist2 = [](int x0, int y0, int x1, int y1, int x, int y)->double {
+                double vx = x1 - x0, vy = y1 - y0;
+                double wx = x - x0, wy = y - y0;
+                double c1 = vx * wx + vy * wy;
+                double c2 = vx * vx + vy * vy;
+                double t = (c2 == 0) ? 0.0 : c1 / c2;
+                if (t < 0) t = 0; if (t > 1) t = 1;
+                double px = x0 + t * vx, py = y0 + t * vy;
+                double dx = x - px, dy = y - py;
+                return dx * dx + dy * dy;
+                };
+            const int TOL = 8;
+            return dist2(x0, y0, x1, y1, x, y) <= (double)TOL * TOL;
         }
     };
 
@@ -53,6 +86,38 @@ private:
                 renderer->drawEllipseOutline(cx, cy, a, b, borderColor, thickness);
             }
         }
+        std::vector<std::pair<int, int>> getControlPoints() override {
+            // usar bounding box 4 esquinas
+            return { {cx - a, cy - b}, {cx + a, cy - b}, {cx + a, cy + b}, {cx - a, cy + b} };
+        }
+        void setControlPoint(int idx, int x, int y) override {
+            auto pts = getControlPoints();
+            if (idx < 0 || idx >= (int)pts.size()) return;
+            // reconstruir a,b,cx,cy a partir de nuevo corner y esquina opuesta
+            std::pair<int, int> other;
+            if (idx == 0) other = pts[2]; // opuesto
+            else if (idx == 1) other = pts[3];
+            else if (idx == 2) other = pts[0];
+            else other = pts[1];
+
+            int xmin = std::min(x, other.first);
+            int xmax = std::max(x, other.first);
+            int ymin = std::min(y, other.second);
+            int ymax = std::max(y, other.second);
+            cx = (xmin + xmax) / 2;
+            cy = (ymin + ymax) / 2;
+            a = std::max(1, (xmax - xmin) / 2);
+            b = std::max(1, (ymax - ymin) / 2);
+        }
+        void moveBy(int dx, int dy) override {
+            cx += dx; cy += dy;
+        }
+        bool containsPoint(int x, int y) override {
+            if (a <= 0 || b <= 0) return false;
+            double dx = (double)(x - cx) / (double)a;
+            double dy = (double)(y - cy) / (double)b;
+            return dx * dx + dy * dy <= 1.0;
+        }
     };
 
     struct Rectangle : public Shape {
@@ -65,6 +130,27 @@ private:
                 renderer->drawRectangleOutline(xmin, ymin, xmax, ymax, borderColor, thickness);
             }
         }
+        std::vector<std::pair<int, int>> getControlPoints() override {
+            return { {xmin,ymin}, {xmax,ymin}, {xmax,ymax}, {xmin,ymax} };
+        }
+        void setControlPoint(int idx, int x, int y) override {
+            std::vector<std::pair<int, int>> pts = getControlPoints();
+            if (idx < 0 || idx >= (int)pts.size()) return;
+            // actualizar la esquina modificada
+            if (idx == 0) { xmin = x; ymin = y; }
+            else if (idx == 1) { xmax = x; ymin = y; }
+            else if (idx == 2) { xmax = x; ymax = y; }
+            else { xmin = x; ymax = y; }
+            // normalizar
+            if (xmin > xmax) std::swap(xmin, xmax);
+            if (ymin > ymax) std::swap(ymin, ymax);
+        }
+        void moveBy(int dx, int dy) override {
+            xmin += dx; xmax += dx; ymin += dy; ymax += dy;
+        }
+        bool containsPoint(int x, int y) override {
+            return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
+        }
     };
 
     struct Triangle : public Shape {
@@ -76,6 +162,28 @@ private:
             else {
                 renderer->drawTriangleOutline(x0, y0, x1, y1, x2, y2, borderColor, thickness);
             }
+        }
+        std::vector<std::pair<int, int>> getControlPoints() override {
+            return { {x0,y0}, {x1,y1}, {x2,y2} };
+        }
+        void setControlPoint(int idx, int x, int y) override {
+            if (idx == 0) { x0 = x; y0 = y; }
+            else if (idx == 1) { x1 = x; y1 = y; }
+            else if (idx == 2) { x2 = x; y2 = y; }
+        }
+        void moveBy(int dx, int dy) override {
+            x0 += dx; y0 += dy; x1 += dx; y1 += dy; x2 += dx; y2 += dy;
+        }
+        bool containsPoint(int x, int y) override {
+            auto sign = [](int px, int py, int ax, int ay, int bx, int by) -> float {
+                return (px - bx) * (ay - by) - (ax - bx) * (py - by);
+                };
+            float d1 = sign(x, y, x0, y0, x1, y1);
+            float d2 = sign(x, y, x1, y1, x2, y2);
+            float d3 = sign(x, y, x2, y2, x0, y0);
+            bool has_neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            bool has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+            return !(has_neg && has_pos);
         }
     };
 
@@ -113,14 +221,51 @@ private:
 
             // 3. Dibujar la Curva (Algoritmo de Casteljau)
             int segments = 100;
-            std::pair<int, int> p0 = renderer->deCasteljau(controlPoints, 0.0f);
+            std::pair<int, int> p0 = CMyTest::deCasteljau(controlPoints, 0.0f);
 
             for (int i = 1; i <= segments; ++i) {
                 float t = (float)i / segments;
-                std::pair<int, int> p1 = renderer->deCasteljau(controlPoints, t);
+                std::pair<int, int> p1 = CMyTest::deCasteljau(controlPoints, t);
                 renderer->drawLine(p0.first, p0.second, p1.first, p1.second, borderColor, thickness);
                 p0 = p1;
             }
+        }
+
+        std::vector<std::pair<int, int>> getControlPoints() override {
+            return controlPoints;
+        }
+        void setControlPoint(int idx, int x, int y) override {
+            if (idx >= 0 && idx < (int)controlPoints.size()) {
+                controlPoints[idx] = { x,y };
+            }
+        }
+        void moveBy(int dx, int dy) override {
+            for (auto& p : controlPoints) { p.first += dx; p.second += dy; }
+        }
+        bool containsPoint(int x, int y) override {
+            // test distancia a la curva muestreada
+            int segments = 80;
+            std::pair<int, int> prev = CMyTest::deCasteljau(controlPoints, 0.0f);
+            const int TOL = 10;
+            for (int i = 1; i <= segments; ++i) {
+                float t = (float)i / segments;
+                std::pair<int, int> cur = CMyTest::deCasteljau(controlPoints, t);
+                // distancia punto a segmento prev-cur
+                auto dist2 = [](int x0, int y0, int x1, int y1, int x, int y)->double {
+                    double vx = x1 - x0, vy = y1 - y0;
+                    double wx = x - x0, wy = y - y0;
+                    double c1 = vx * wx + vy * wy;
+                    double c2 = vx * vx + vy * vy;
+                    double t = (c2 == 0) ? 0.0 : c1 / c2;
+                    if (t < 0) t = 0; if (t > 1) t = 1;
+                    double px = x0 + t * vx, py = y0 + t * vy;
+                    double dx = x - px, dy = y - py;
+                    return dx * dx + dy * dy;
+                    };
+                if (dist2(prev.first, prev.second, cur.first, cur.second, x, y) <= (double)TOL * TOL) return true;
+                prev = cur;
+            }
+            return false;
         }
     };
 
@@ -151,6 +296,16 @@ private:
     // Modo 4: Bezier
     int m_bezierControlPointRadius = 5;
     std::vector<std::pair<int, int>> m_tempControlPoints;
+
+    // Nueva: selección y arrastre genérico
+    Shape* m_selectedShape = nullptr;
+    int m_selectedHandleIndex = -1; // -1 => mover figura completa, >=0 => handle index
+    bool m_isDraggingHandle = false;
+    std::pair<int, int> m_dragStartMouse;
+    std::vector<std::pair<int, int>> m_dragStartPoints; // snapshot de control points al iniciar drag
+
+    // Nuevo: indica que el press inicializó sobre un handle / punto de control
+    bool m_pressedOnHandle = false;
 
 public:
     CMyTest() {};
@@ -271,7 +426,7 @@ public:
         setThickPixel(static_cast<int>(cx - x), static_cast<int>(cy - y), color, thickness);
     }
 
-    void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color, int thickness=1)
+    void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color, int thickness = 1)
     {
         m_drawnPixels.clear();
 
@@ -475,7 +630,7 @@ public:
         }
     }
 
-    std::pair<int, int> deCasteljau(const std::vector<std::pair<int, int>>& points, float t) {
+    static std::pair<int, int> deCasteljau(const std::vector<std::pair<int, int>>& points, float t) {
         if (points.empty()) return { 0, 0 };
 
         std::vector<std::pair<float, float>> temp(points.size());
@@ -496,7 +651,33 @@ public:
     }
 
     std::pair<int, int> deCasteljauTemp(const std::vector<std::pair<int, int>>& points, float t) {
-        return deCasteljau(points, t);
+        return CMyTest::deCasteljau(points, t);
+    }
+
+    // Nueva función: busca figura y handle cerca del punto (tx,ty)
+    Shape* findShapeAt(int tx, int ty, int& outHandleIndex) {
+        const int HANDLE_TOL = 10;
+        outHandleIndex = -2;
+        for (auto it = m_shapes.rbegin(); it != m_shapes.rend(); ++it) {
+            Shape* s = it->get();
+            // primero comprobar handlers
+            auto pts = s->getControlPoints();
+            for (size_t i = 0; i < pts.size(); ++i) {
+                int dx = pts[i].first - tx;
+                int dy = pts[i].second - ty;
+                if (dx * dx + dy * dy <= HANDLE_TOL * HANDLE_TOL) {
+                    outHandleIndex = (int)i;
+                    return s;
+                }
+            }
+            // luego comprobación de contenido
+            if (s->containsPoint(tx, ty)) {
+                outHandleIndex = -1; // seleccionar figura completa
+                return s;
+            }
+        }
+        outHandleIndex = -2;
+        return nullptr;
     }
 
     BezierCurve* findBezierCurveNear(int x, int y, int& controlPointIndex) {
@@ -539,6 +720,32 @@ public:
 
         for (const auto& shape : m_shapes) {
             shape->draw(this);
+        }
+
+        // Dibujar handles para la figura seleccionada (si existe)
+        if (m_selectedShape) {
+            auto pts = m_selectedShape->getControlPoints();
+            const int half = 4;
+            for (size_t i = 0; i < pts.size(); ++i) {
+                int px = pts[i].first;
+                int py = pts[i].second;
+                RGBA col = (m_selectedHandleIndex == (int)i) ? m_selectedControlPointColor : m_selectionHandleColor;
+                drawRectangleFilled(px - half, py - half, px + half, py + half, col, col, 1);
+            }
+            // Si se seleccionó la figura completa dibujar un bounding box
+            if (m_selectedHandleIndex == -1) {
+                auto pts2 = m_selectedShape->getControlPoints();
+                if (!pts2.empty()) {
+                    int xmin = pts2[0].first, xmax = pts2[0].first, ymin = pts2[0].second, ymax = pts2[0].second;
+                    for (auto& p : pts2) {
+                        xmin = std::min(xmin, p.first);
+                        xmax = std::max(xmax, p.first);
+                        ymin = std::min(ymin, p.second);
+                        ymax = std::max(ymax, p.second);
+                    }
+                    drawRectangleOutline(xmin - 6, ymin - 6, xmax + 6, ymax + 6, m_selectionHandleColor, 1);
+                }
+            }
         }
 
         if (m_drawMode == 4 && m_editMode == 0) {
@@ -640,7 +847,7 @@ public:
             if (key == GLFW_KEY_ESCAPE)
                 glfwSetWindowShouldClose(m_window, GLFW_TRUE);
 
-            // Tecla E para cambiar entre modo crear/editar
+            // Tecla E para cambiar entre modo crear/editar (solo para Bezier)
             if (key == GLFW_KEY_E && m_drawMode == 4) {
                 m_editMode = (m_editMode == 0) ? 1 : 0;
                 m_editingCurve = nullptr;
@@ -649,11 +856,18 @@ public:
                 std::cout << "Edit mode: " << (m_editMode == 0 ? "Create" : "Edit") << "\n";
             }
 
-			// Tecla Espacio para cancelar la creación de la curva Bezier
+            // Tecla S para deseleccionar
+            if (key == GLFW_KEY_S) {
+                m_selectedShape = nullptr;
+                m_selectedHandleIndex = -1;
+                m_isDraggingHandle = false;
+            }
+
+            // Tecla Espacio para cancelar la creación de la curva Bezier
             if (key == GLFW_KEY_SPACE && m_drawMode == 4 && m_editMode == 0) {
                 m_tempControlPoints.clear();
                 std::cout << "Bezier Curve creation canceled.\n";
-			}
+            }
         }
         else if (action == GLFW_RELEASE)
             std::cout << "Key " << key << " released\n";
@@ -676,7 +890,9 @@ public:
             if (action == GLFW_PRESS)
             {
                 mouseButtonsDown[button] = true;
-
+                if (button == 0 && (m_isDraggingHandle || m_isDraggingControlPoint)) {
+                    return;
+                }
                 if (m_drawMode == 4) { // Bezier mode
                     if (m_editMode == 0) { // Modo crear
                         if (button == 0) {
@@ -706,7 +922,7 @@ public:
                             std::cout << "Bezier Curve canceled.\n";
                         }
                     }
-                    else if (m_editMode == 1) { // Modo editar
+                    else if (m_editMode == 1) { // Modo editar Bézier (mantener compatibilidad)
                         if (button == 0) {
                             int cpIndex;
                             BezierCurve* curve = findBezierCurveNear(tx, ty, cpIndex);
@@ -715,46 +931,88 @@ public:
                                 m_selectedControlPoint = cpIndex;
                                 m_isDraggingControlPoint = true;
                                 m_originalMousePos = { tx, ty };
+                                m_pressedOnHandle = true; // <-- añadir
                                 std::cout << "Selected control point " << cpIndex << "\n";
                             }
                             else if (curve && cpIndex < 0) {
                                 m_editingCurve = curve;
                                 m_selectedControlPoint = -1;
+                                m_pressedOnHandle = true; // <-- añadir (click sobre curva)
                                 std::cout << "Selected entire curve\n";
                             }
                         }
                     }
                 }
-                else if (m_drawMode < 3) {
-                    if (button == 0)
-                    {
-                        m_x0 = tx;
-                        m_y0 = ty;
-                        m_x1 = m_x0;
-                        m_y1 = m_y0;
-                        std::cout << "Inicio de figura en (" << m_x0 << ", " << m_y0 << ")\n";
+                else {
+                    int handleIdx;
+                    Shape* hit = findShapeAt(tx, ty, handleIdx);
+                    if (hit) {
+                        m_selectedShape = hit;
+                        m_selectedHandleIndex = handleIdx;
+                        m_isDraggingHandle = true;
+                        m_dragStartMouse = { tx, ty };
+                        m_dragStartPoints = m_selectedShape->getControlPoints();
+                        m_pressedOnHandle = true;
+                        std::cout << "Selected shape. handle=" << handleIdx << "\n";
+                        // Importante: retornar evita que se procese la creacion de triángulos u otras figuras
+                        // provocada por este mismo clic.
+                        return;
                     }
-                }
-                else if (m_drawMode == 3) {
-                    if (button == 0) {
-                        if (m_triClicks < 3) {
-                            m_triTempX[m_triClicks] = tx;
-                            m_triTempY[m_triClicks] = ty;
-                            m_triClicks++;
-                            std::cout << "Triangle click " << m_triClicks << " at (" << tx << ", " << ty << ")\n";
+                    
+                    // Modo general: creación o selección/arrastre de figuras existentes
+                    if (m_drawMode < 3) {
+                        if (button == 0)
+                        {
+                            m_x0 = tx;
+                            m_y0 = ty;
+                            m_x1 = m_x0;
+                            m_y1 = m_y0;
+                            std::cout << "Inicio de figura en (" << m_x0 << ", " << m_y0 << ")\n";
                         }
-                        if (m_triClicks == 3) {
-                            auto tr = std::make_unique<Triangle>();
-                            tr->x0 = m_triTempX[0]; tr->y0 = m_triTempY[0];
-                            tr->x1 = m_triTempX[1]; tr->y1 = m_triTempY[1];
-                            tr->x2 = m_triTempX[2]; tr->y2 = m_triTempY[2];
-                            tr->borderColor = m_borderColor;
-                            tr->fillColor = m_fillColor;
-                            tr->thickness = m_lineThickness;
-                            tr->filled = m_useFilledShapes;
-                            m_shapes.push_back(std::move(tr));
-                            m_triClicks = 0;
-                            std::cout << "Triangle finalized.\n";
+                    }
+                    else if (m_drawMode == 3) {
+                        if (button == 0) {
+                            if (m_triClicks < 3) {
+                                m_triTempX[m_triClicks] = tx;
+                                m_triTempY[m_triClicks] = ty;
+                                m_triClicks++;
+                                std::cout << "Triangle click " << m_triClicks << " at (" << tx << ", " << ty << ")\n";
+                            }
+                            if (m_triClicks == 3) {
+                                auto tr = std::make_unique<Triangle>();
+                                tr->x0 = m_triTempX[0]; tr->y0 = m_triTempY[0];
+                                tr->x1 = m_triTempX[1]; tr->y1 = m_triTempY[1];
+                                tr->x2 = m_triTempX[2]; tr->y2 = m_triTempY[2];
+                                tr->borderColor = m_borderColor;
+                                tr->fillColor = m_fillColor;
+                                tr->thickness = m_lineThickness;
+                                tr->filled = m_useFilledShapes;
+                                m_shapes.push_back(std::move(tr));
+                                m_triClicks = 0;
+                                std::cout << "Triangle finalized.\n";
+                            }
+                        }
+                    }
+
+                    // Selección / inicio de drag sobre figuras existentes (solo con botón izquierdo)
+                    if (button == 0) {
+                        int handleIdx;
+                        Shape* s = findShapeAt(tx, ty, handleIdx);
+                        if (s) {
+                            m_selectedShape = s;
+                            m_selectedHandleIndex = handleIdx; // -1 mover, >=0 handle index
+                            m_isDraggingHandle = true;
+                            m_dragStartMouse = { tx, ty };
+                            m_dragStartPoints = m_selectedShape->getControlPoints();
+                            m_pressedOnHandle = true; // <-- añadir
+                            std::cout << "Selected shape. handle=" << handleIdx << "\n";
+                        }
+                        else {
+                            // click en vacío -> deseleccionar
+                            m_selectedShape = nullptr;
+                            m_selectedHandleIndex = -1;
+                            m_isDraggingHandle = false;
+                            m_pressedOnHandle = false; // <-- asegurar limpio
                         }
                     }
                 }
@@ -762,6 +1020,16 @@ public:
             else if (action == GLFW_RELEASE)
             {
                 mouseButtonsDown[button] = false;
+
+                // Si el release ocurre tras arrastrar un handle/punto de control,
+                // finalizamos el drag y evitamos ejecutar la lógica de "finalizar figura".
+                if (button == 0 && (m_isDraggingHandle || m_isDraggingControlPoint)) {
+                    m_isDraggingHandle = false;
+                    m_isDraggingControlPoint = false;
+                    m_pressedOnHandle = false;
+                    // no creamos nuevas figuras, retornamos ya que el release corresponde al drag
+                    return;
+                }
 
                 if (m_drawMode == 4 && m_editMode == 1 && button == 0) {
                     m_isDraggingControlPoint = false;
@@ -773,7 +1041,7 @@ public:
                         m_y1 = ty;
                         std::cout << "Figura finalizada en (" << m_x1 << ", " << m_y1 << ")\n";
 
-                        if (m_drawMode == 0) {
+                        auto createLine = [&]() {
                             auto ln = std::make_unique<Line>();
                             ln->x0 = m_x0; ln->y0 = m_y0; ln->x1 = m_x1; ln->y1 = m_y1;
                             ln->borderColor = m_borderColor;
@@ -781,8 +1049,9 @@ public:
                             ln->thickness = m_lineThickness;
                             ln->filled = m_useFilledShapes;
                             m_shapes.push_back(std::move(ln));
-                        }
-                        else if (m_drawMode == 1) {
+                            };
+
+                        auto createEllipse = [&]() {
                             auto el = std::make_unique<Ellipse>();
                             el->cx = m_x0; el->cy = m_y0;
                             el->a = std::abs(m_x1 - m_x0); el->b = std::abs(m_y1 - m_y0);
@@ -791,8 +1060,9 @@ public:
                             el->thickness = m_lineThickness;
                             el->filled = m_useFilledShapes;
                             m_shapes.push_back(std::move(el));
-                        }
-                        else if (m_drawMode == 2) {
+                            };
+
+                        auto createRectangle = [&]() {
                             auto rc = std::make_unique<Rectangle>();
                             rc->xmin = std::min(m_x0, m_x1);
                             rc->xmax = std::max(m_x0, m_x1);
@@ -803,10 +1073,22 @@ public:
                             rc->thickness = m_lineThickness;
                             rc->filled = m_useFilledShapes;
                             m_shapes.push_back(std::move(rc));
+                            };
+
+                        // Solo crear figura si el press inicial NO fue sobre un handle/punto de control
+                        if (!m_pressedOnHandle) {
+                            if (m_drawMode == 0) createLine();
+                            else if (m_drawMode == 1) createEllipse();
+                            else if (m_drawMode == 2) createRectangle();
                         }
 
                         m_x0 = -1; m_y0 = -1; m_x1 = -1; m_y1 = -1;
                     }
+                }
+
+                // terminar arrastre de handle cuando se suelta el botón izquierdo
+                if (button == 0) {
+                    m_isDraggingHandle = false;
                 }
             }
         }
@@ -822,19 +1104,43 @@ public:
         int xpos = static_cast<int>(xpos_d);
         int ypos = height - 1 - static_cast<int>(ypos_d);
 
-        // Edición de curvas Bézier
+        // Edición de curvas Bézier (modo legacy)
         if (m_drawMode == 4 && m_editMode == 1 && m_isDraggingControlPoint && m_editingCurve && m_selectedControlPoint >= 0) {
             m_editingCurve->controlPoints[m_selectedControlPoint] = { xpos, ypos };
         }
-        else if (m_drawMode != 3) {
-            if (mouseButtonsDown[0])
-            {
-                m_x1 = xpos;
-                m_y1 = ypos;
-            }
-        }
         else {
-            m_x1 = xpos; m_y1 = ypos;
+            // Drag de handles / mover figura
+            if (m_isDraggingHandle && m_selectedShape) {
+                int dx = xpos - m_dragStartMouse.first;
+                int dy = ypos - m_dragStartMouse.second;
+
+                if (m_selectedHandleIndex == -1) {
+                    // Mover figura completa usando el snapshot de puntos iniciales (evita acumulación)
+                    for (size_t i = 0; i < m_dragStartPoints.size(); ++i) {
+                        m_selectedShape->setControlPoint((int)i,
+                            m_dragStartPoints[i].first + dx,
+                            m_dragStartPoints[i].second + dy);
+                    }
+                }
+                else if (m_selectedHandleIndex >= 0) {
+                    // mover solo el handle seleccionado, usando snapshot original
+                    if (m_selectedHandleIndex < (int)m_dragStartPoints.size()) {
+                        int origx = m_dragStartPoints[m_selectedHandleIndex].first;
+                        int origy = m_dragStartPoints[m_selectedHandleIndex].second;
+                        m_selectedShape->setControlPoint(m_selectedHandleIndex, origx + dx, origy + dy);
+                    }
+                }
+            }
+            else if (m_drawMode != 3) {
+                if (mouseButtonsDown[0])
+                {
+                    m_x1 = xpos;
+                    m_y1 = ypos;
+                }
+            }
+            else {
+                m_x1 = xpos; m_y1 = ypos;
+            }
         }
     }
 
@@ -987,6 +1293,8 @@ public:
             m_tempControlPoints.clear();
             m_editingCurve = nullptr;
             m_selectedControlPoint = -1;
+            m_selectedShape = nullptr;
+            m_selectedHandleIndex = -1;
         }
 
         ImGui::End();
