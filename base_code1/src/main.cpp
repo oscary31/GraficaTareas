@@ -24,7 +24,11 @@ private:
     RGBA m_controlPointColor = { 255, 119, 0, 255 };        // Naranja
     RGBA m_selectedControlPointColor = { 0, 119, 255, 255 }; // Azul
     RGBA m_controlPolygonColor = { 136, 136, 136, 255 };      // Gris para las líneas
-    RGBA m_selectionHandleColor = { 0, 255, 255, 255 };       // Cyan para handles
+    RGBA m_selectionHandleColor = m_controlPointColor;       // Cyan para handles
+
+    // Colores de fondo
+    float m_bgColorArray[4] = { 201.0f / 255.0f, 201.0f / 255.0f, 201.0f / 255.0f, 1.0f };
+    RGBA m_bgColor = { 216, 216, 216, 255 };
 
     // Base class para todas las figuras
     struct Shape {
@@ -702,7 +706,7 @@ public:
 
     void update()
     {
-        std::fill(m_buffer.begin(), m_buffer.end(), RGBA{ 201,201,201,255 });
+        std::fill(m_buffer.begin(), m_buffer.end(), m_bgColor);
         framesThisSecond++;
 
         for (const auto& shape : m_shapes) {
@@ -835,15 +839,6 @@ public:
             if (key == GLFW_KEY_ESCAPE)
                 glfwSetWindowShouldClose(m_window, GLFW_TRUE);
 
-            // Tecla E todavía puede alternar un modo interno pero ya no es necesario para editar Bézier
-            if (key == GLFW_KEY_E && m_drawMode == 4) {
-                m_editMode = (m_editMode == 0) ? 1 : 0;
-                m_editingCurve = nullptr;
-                m_selectedControlPoint = -1;
-                m_tempControlPoints.clear();
-                std::cout << "Edit mode: " << (m_editMode == 0 ? "Create" : "Edit") << "\n";
-            }
-
             // Tecla S para deseleccionar
             if (key == GLFW_KEY_S) {
                 m_selectedShape = nullptr;
@@ -884,42 +879,49 @@ public:
 
                 bool prevSelected = (m_selectedShape != nullptr);
 
-                // Unified hit detection for any shape or bezier control point
-                if (button == 0) {
-                    int bzCp;
-                    BezierCurve* bzHit = findBezierCurveNear(tx, ty, bzCp);
-                    if (bzHit) {
-                        m_selectedShape = bzHit;
-                        m_selectedHandleIndex = (bzCp >= 0) ? bzCp : -1;
-                        m_isDraggingHandle = true;
-                        m_dragStartMouse = { tx, ty };
-                        m_dragStartPoints = m_selectedShape->getControlPoints();
-                        m_pressedOnHandle = true;
-                        std::cout << "Selected Bezier. handle=" << m_selectedHandleIndex << "\n";
-                        return;
-                    }
+                // If we already started creating a shape, subsequent clicks (except the initial one)
+                // must be treated as part of creation and must NOT select existing shapes.
+                bool creatingInProgress = m_isCreatingShape || (m_drawMode == 4 && !m_tempControlPoints.empty()) || (m_drawMode == 3 && m_triClicks > 0);
 
-                    int handleIdx;
-                    Shape* sHit = findShapeAt(tx, ty, handleIdx);
-                    if (sHit) {
-                        m_selectedShape = sHit;
-                        m_selectedHandleIndex = handleIdx;
-                        m_isDraggingHandle = true;
-                        m_dragStartMouse = { tx, ty };
-                        m_dragStartPoints = m_selectedShape->getControlPoints();
-                        m_pressedOnHandle = true;
-                        std::cout << "Selected shape. handle=" << handleIdx << "\n";
-                        return;
-                    }
+                // If creatingInProgress, skip hit detection/selection and go directly to creation logic below.
+                if (!creatingInProgress) {
+                    // Unified hit detection for any shape or bezier control point
+                    if (button == 0) {
+                        int bzCp;
+                        BezierCurve* bzHit = findBezierCurveNear(tx, ty, bzCp);
+                        if (bzHit) {
+                            m_selectedShape = bzHit;
+                            m_selectedHandleIndex = (bzCp >= 0) ? bzCp : -1;
+                            m_isDraggingHandle = true;
+                            m_dragStartMouse = { tx, ty };
+                            m_dragStartPoints = m_selectedShape->getControlPoints();
+                            m_pressedOnHandle = true;
+                            std::cout << "Selected Bezier. handle=" << m_selectedHandleIndex << "\n";
+                            return;
+                        }
 
-                    // Click on empty background
-                    if (prevSelected) {
-                        // deselect and do not start creation
-                        m_selectedShape = nullptr;
-                        m_selectedHandleIndex = -1;
-                        m_pressedOnHandle = false;
-                        m_isCreatingShape = false;
-                        return;
+                        int handleIdx;
+                        Shape* sHit = findShapeAt(tx, ty, handleIdx);
+                        if (sHit) {
+                            m_selectedShape = sHit;
+                            m_selectedHandleIndex = handleIdx;
+                            m_isDraggingHandle = true;
+                            m_dragStartMouse = { tx, ty };
+                            m_dragStartPoints = m_selectedShape->getControlPoints();
+                            m_pressedOnHandle = true;
+                            std::cout << "Selected shape. handle=" << handleIdx << "\n";
+                            return;
+                        }
+
+                        // Click on empty background
+                        if (prevSelected) {
+                            // deselect and do not start creation
+                            m_selectedShape = nullptr;
+                            m_selectedHandleIndex = -1;
+                            m_pressedOnHandle = false;
+                            m_isCreatingShape = false;
+                            return;
+                        }
                     }
                 }
 
@@ -1173,41 +1175,12 @@ public:
         }
 
         // Existing Bezier-mode color editors remain for legacy; add global editors when a shape is selected
-        if (m_selectedShape) {
-            ImGui::Separator();
-            ImGui::Text("Control Point Colors (selected shape):");
-
-            float selControlPointCol[4] = {
-                m_selectedControlPointColor.r / 255.0f,
-                m_selectedControlPointColor.g / 255.0f,
-                m_selectedControlPointColor.b / 255.0f,
-                m_selectedControlPointColor.a / 255.0f
-            };
-            if (ImGui::ColorEdit4("Selected CP Color", selControlPointCol)) {
-                m_selectedControlPointColor.r = static_cast<unsigned char>(selControlPointCol[0] * 255.0f);
-                m_selectedControlPointColor.g = static_cast<unsigned char>(selControlPointCol[1] * 255.0f);
-                m_selectedControlPointColor.b = static_cast<unsigned char>(selControlPointCol[2] * 255.0f);
-                m_selectedControlPointColor.a = static_cast<unsigned char>(selControlPointCol[3] * 255.0f);
-            }
-
-            float normalControlPointCol[4] = {
-                m_controlPointColor.r / 255.0f,
-                m_controlPointColor.g / 255.0f,
-                m_controlPointColor.b / 255.0f,
-                m_controlPointColor.a / 255.0f
-            };
-            if (ImGui::ColorEdit4("Normal CP Color", normalControlPointCol)) {
-                m_controlPointColor.r = static_cast<unsigned char>(normalControlPointCol[0] * 255.0f);
-                m_controlPointColor.g = static_cast<unsigned char>(normalControlPointCol[1] * 255.0f);
-                m_controlPointColor.b = static_cast<unsigned char>(normalControlPointCol[2] * 255.0f);
-                m_controlPointColor.a = static_cast<unsigned char>(normalControlPointCol[3] * 255.0f);
-            }
-        }
+        
 
         ImGui::Separator();
         ImGui::SliderInt("Line Thickness", &m_lineThickness, 1, 31);
         ImGui::Separator();
-
+        ImGui::Text("Shape Colors:");
         float borderCol[4] = {
              m_borderColor.r / 255.0f,
              m_borderColor.g / 255.0f,
@@ -1234,6 +1207,52 @@ public:
             m_fillColor.a = static_cast<unsigned char>(fillCol[3] * 255.0f);
         }
 
+        if (m_selectedShape) {
+            ImGui::Separator();
+            ImGui::Text("Control Point Colors:");
+            float normalControlPointCol[4] = {
+                m_controlPointColor.r / 255.0f,
+                m_controlPointColor.g / 255.0f,
+                m_controlPointColor.b / 255.0f,
+                m_controlPointColor.a / 255.0f
+            };
+            if (ImGui::ColorEdit4("Normal Color", normalControlPointCol)) {
+                m_controlPointColor.r = static_cast<unsigned char>(normalControlPointCol[0] * 255.0f);
+                m_controlPointColor.g = static_cast<unsigned char>(normalControlPointCol[1] * 255.0f);
+                m_controlPointColor.b = static_cast<unsigned char>(normalControlPointCol[2] * 255.0f);
+                m_controlPointColor.a = static_cast<unsigned char>(normalControlPointCol[3] * 255.0f);
+            }
+            
+            float selControlPointCol[4] = {
+                m_selectedControlPointColor.r / 255.0f,
+                m_selectedControlPointColor.g / 255.0f,
+                m_selectedControlPointColor.b / 255.0f,
+                m_selectedControlPointColor.a / 255.0f
+            };
+            if (ImGui::ColorEdit4("Selected Color", selControlPointCol)) {
+                m_selectedControlPointColor.r = static_cast<unsigned char>(selControlPointCol[0] * 255.0f);
+                m_selectedControlPointColor.g = static_cast<unsigned char>(selControlPointCol[1] * 255.0f);
+                m_selectedControlPointColor.b = static_cast<unsigned char>(selControlPointCol[2] * 255.0f);
+                m_selectedControlPointColor.a = static_cast<unsigned char>(selControlPointCol[3] * 255.0f);
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Background Color:");
+        if (ImGui::ColorEdit4("##bgcolor", m_bgColorArray)) {
+            // Actualizar struct RGBA a partir del arreglo float
+            m_bgColor.r = static_cast<unsigned char>(m_bgColorArray[0] * 255.0f);
+            m_bgColor.g = static_cast<unsigned char>(m_bgColorArray[1] * 255.0f);
+            m_bgColor.b = static_cast<unsigned char>(m_bgColorArray[2] * 255.0f);
+            m_bgColor.a = static_cast<unsigned char>(m_bgColorArray[3] * 255.0f);
+
+            // Rellenar el buffer de pixeles con el nuevo color de fondo
+            if (!m_buffer.empty()) {
+                std::fill(m_buffer.begin(), m_buffer.end(), m_bgColor);
+            }
+        }
+            
+        
         ImGui::Separator();
         if (ImGui::Button("Clear screen")) {
             m_shapes.clear();
