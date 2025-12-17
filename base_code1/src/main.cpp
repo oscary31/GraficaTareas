@@ -20,7 +20,7 @@ private:
     int m_lineThickness = 1;
     bool m_useFilledShapes = false;
 
-    // Colores para los puntos de control de Bézier y selección
+    // Colores para los puntos de control de Bézier y selección (unificados)
     RGBA m_controlPointColor = { 255, 119, 0, 255 };        // Naranja
     RGBA m_selectedControlPointColor = { 0, 119, 255, 255 }; // Azul
     RGBA m_controlPolygonColor = { 136, 136, 136, 255 };      // Gris para las líneas
@@ -93,7 +93,6 @@ private:
         void setControlPoint(int idx, int x, int y) override {
             auto pts = getControlPoints();
             if (idx < 0 || idx >= (int)pts.size()) return;
-            // reconstruir a,b,cx,cy a partir de nuevo corner y esquina opuesta
             std::pair<int, int> other;
             if (idx == 0) other = pts[2]; // opuesto
             else if (idx == 1) other = pts[3];
@@ -136,12 +135,10 @@ private:
         void setControlPoint(int idx, int x, int y) override {
             std::vector<std::pair<int, int>> pts = getControlPoints();
             if (idx < 0 || idx >= (int)pts.size()) return;
-            // actualizar la esquina modificada
             if (idx == 0) { xmin = x; ymin = y; }
             else if (idx == 1) { xmax = x; ymin = y; }
             else if (idx == 2) { xmax = x; ymax = y; }
             else { xmin = x; ymax = y; }
-            // normalizar
             if (xmin > xmax) std::swap(xmin, xmax);
             if (ymin > ymax) std::swap(ymin, ymax);
         }
@@ -194,32 +191,7 @@ private:
         void draw(CMyTest* renderer) override {
             if (controlPoints.size() < 2) return;
 
-            // 1. Dibujar el Polígono de Control (líneas)
-            for (size_t i = 0; i < controlPoints.size() - 1; ++i) {
-                const auto& pA = controlPoints[i];
-                const auto& pB = controlPoints[i + 1];
-                renderer->drawLine(pA.first, pA.second, pB.first, pB.second,
-                    renderer->m_controlPolygonColor, 1);
-            }
-
-            // 2. Dibujar los Puntos de Control (círculos rellenos)
-            int pointRadius = 5;
-            for (size_t i = 0; i < controlPoints.size(); ++i) {
-                const auto& p = controlPoints[i];
-                RGBA pointColor = renderer->m_controlPointColor; // Usar el color de la clase
-
-                // Resaltar el punto seleccionado si estamos editando esta curva
-                if (renderer->m_editMode == 1 &&
-                    renderer->m_editingCurve == this &&
-                    (int)i == renderer->m_selectedControlPoint) {
-                    pointColor = renderer->m_selectedControlPointColor; // Usar el color de selección
-                }
-
-                renderer->drawEllipseFilled(p.first, p.second, pointRadius, pointRadius,
-                    pointColor, pointColor, 1);
-            }
-
-            // 3. Dibujar la Curva (Algoritmo de Casteljau)
+            // 3. Dibujar la Curva (siempre)
             int segments = 100;
             std::pair<int, int> p0 = CMyTest::deCasteljau(controlPoints, 0.0f);
 
@@ -228,6 +200,19 @@ private:
                 std::pair<int, int> p1 = CMyTest::deCasteljau(controlPoints, t);
                 renderer->drawLine(p0.first, p0.second, p1.first, p1.second, borderColor, thickness);
                 p0 = p1;
+            }
+
+            // Dibujar polígono de control y puntos solo si la curva está seleccionada
+            if (renderer->m_selectedShape == this) {
+                // Polígono de control
+                for (size_t i = 0; i < controlPoints.size() - 1; ++i) {
+                    const auto& pA = controlPoints[i];
+                    const auto& pB = controlPoints[i + 1];
+                    renderer->drawLine(pA.first, pA.second, pB.first, pB.second,
+                        renderer->m_controlPolygonColor, 1);
+                }
+
+                // control points are drawn centrally in update() for all shapes
             }
         }
 
@@ -270,7 +255,7 @@ private:
     };
 
     // Para la edición de curvas Bézier
-    int m_editMode = 0; // 0=crear nueva, 1=editar existente
+    int m_editMode = 0; // mantenemos pero ya no obligatorio
     BezierCurve* m_editingCurve = nullptr;
     int m_selectedControlPoint = -1;
     std::pair<int, int> m_originalMousePos;
@@ -294,7 +279,7 @@ private:
     };
 
     // Modo 4: Bezier
-    int m_bezierControlPointRadius = 5;
+    int m_controlPointRadius = 5; // unified radius for all control points
     std::vector<std::pair<int, int>> m_tempControlPoints;
 
     // Nueva: selección y arrastre genérico
@@ -306,6 +291,8 @@ private:
 
     // Nuevo: indica que el press inicializó sobre un handle / punto de control
     bool m_pressedOnHandle = false;
+    // Nuevo: indica si se inició la creación de una figura (press en lienzo)
+    bool m_isCreatingShape = false;
 
 public:
     CMyTest() {};
@@ -725,30 +712,31 @@ public:
         // Dibujar handles para la figura seleccionada (si existe)
         if (m_selectedShape) {
             auto pts = m_selectedShape->getControlPoints();
-            const int half = 4;
+            // Draw unified circular control points
             for (size_t i = 0; i < pts.size(); ++i) {
                 int px = pts[i].first;
                 int py = pts[i].second;
-                RGBA col = (m_selectedHandleIndex == (int)i) ? m_selectedControlPointColor : m_selectionHandleColor;
-                drawRectangleFilled(px - half, py - half, px + half, py + half, col, col, 1);
+                RGBA col = (m_selectedHandleIndex == (int)i) ? m_selectedControlPointColor : m_controlPointColor;
+                drawEllipseFilled(px, py, m_controlPointRadius, m_controlPointRadius, col, col, 1);
             }
-            // Si se seleccionó la figura completa dibujar un bounding box
-            if (m_selectedHandleIndex == -1) {
-                auto pts2 = m_selectedShape->getControlPoints();
-                if (!pts2.empty()) {
-                    int xmin = pts2[0].first, xmax = pts2[0].first, ymin = pts2[0].second, ymax = pts2[0].second;
-                    for (auto& p : pts2) {
-                        xmin = std::min(xmin, p.first);
-                        xmax = std::max(xmax, p.first);
-                        ymin = std::min(ymin, p.second);
-                        ymax = std::max(ymax, p.second);
-                    }
-                    drawRectangleOutline(xmin - 6, ymin - 6, xmax + 6, ymax + 6, m_selectionHandleColor, 1);
-                }
-            }
-        }
+             // Si se seleccionó la figura completa dibujar un bounding box
+             if (m_selectedHandleIndex == -1) {
+                 auto pts2 = m_selectedShape->getControlPoints();
+                 if (!pts2.empty()) {
+                     int xmin = pts2[0].first, xmax = pts2[0].first, ymin = pts2[0].second, ymax = pts2[0].second;
+                     for (auto& p : pts2) {
+                         xmin = std::min(xmin, p.first);
+                         xmax = std::max(xmax, p.first);
+                         ymin = std::min(ymin, p.second);
+                         ymax = std::max(ymax, p.second);
+                     }
+                     drawRectangleOutline(xmin - 6, ymin - 6, xmax + 6, ymax + 6, m_selectionHandleColor, 1);
+                 }
+             }
+         }
 
-        if (m_drawMode == 4 && m_editMode == 0) {
+        if (m_drawMode == 4 && m_tempControlPoints.size() > 0) {
+            // Cuando estamos creando (temp control points) dibujamos el polígono/handles aquí
             for (size_t i = 0; i < m_tempControlPoints.size(); ++i) {
                 const auto& p = m_tempControlPoints[i];
                 if (i < m_tempControlPoints.size() - 1) {
@@ -756,8 +744,8 @@ public:
                     drawLine(p.first, p.second, pNext.first, pNext.second,
                         m_controlPolygonColor, 1);
                 }
-                drawEllipseFilled(p.first, p.second, m_bezierControlPointRadius,
-                    m_bezierControlPointRadius,
+                drawEllipseFilled(p.first, p.second, m_controlPointRadius,
+                    m_controlPointRadius,
                     m_controlPointColor, m_controlPointColor, 1);
             }
 
@@ -771,8 +759,8 @@ public:
                 drawLine(lastPoint.first, lastPoint.second, cx, cy,
                     m_controlPolygonColor, 1);
 
-                drawEllipseFilled(cx, cy, m_bezierControlPointRadius / 2,
-                    m_bezierControlPointRadius / 2,
+                drawEllipseFilled(cx, cy, m_controlPointRadius / 2,
+                    m_controlPointRadius / 2,
                     m_controlPolygonColor, m_controlPolygonColor, 1);
             }
 
@@ -847,7 +835,7 @@ public:
             if (key == GLFW_KEY_ESCAPE)
                 glfwSetWindowShouldClose(m_window, GLFW_TRUE);
 
-            // Tecla E para cambiar entre modo crear/editar (solo para Bezier)
+            // Tecla E todavía puede alternar un modo interno pero ya no es necesario para editar Bézier
             if (key == GLFW_KEY_E && m_drawMode == 4) {
                 m_editMode = (m_editMode == 0) ? 1 : 0;
                 m_editingCurve = nullptr;
@@ -864,7 +852,7 @@ public:
             }
 
             // Tecla Espacio para cancelar la creación de la curva Bezier
-            if (key == GLFW_KEY_SPACE && m_drawMode == 4 && m_editMode == 0) {
+            if (key == GLFW_KEY_SPACE && m_drawMode == 4 && !m_tempControlPoints.empty()) {
                 m_tempControlPoints.clear();
                 std::cout << "Bezier Curve creation canceled.\n";
             }
@@ -893,72 +881,80 @@ public:
                 if (button == 0 && (m_isDraggingHandle || m_isDraggingControlPoint)) {
                     return;
                 }
-                if (m_drawMode == 4) { // Bezier mode
-                    if (m_editMode == 0) { // Modo crear
-                        if (button == 0) {
-                            m_tempControlPoints.push_back({ tx, ty });
-                            std::cout << "Added control point (" << tx << ", " << ty
-                                << "). Total: " << m_tempControlPoints.size() << "\n";
-                        }
-                        else if (button == 1) {
-                            if (m_tempControlPoints.size() >= 2) {
-                                auto bz = std::make_unique<BezierCurve>();
-                                bz->controlPoints = m_tempControlPoints;
-                                bz->borderColor = m_borderColor;
-                                bz->fillColor = m_fillColor;
-                                bz->thickness = m_lineThickness;
-                                bz->filled = false;
-                                m_shapes.push_back(std::move(bz));
-                                std::cout << "Bezier Curve finalized with "
-                                    << m_tempControlPoints.size() << " points.\n";
-                                m_tempControlPoints.clear();
-                            }
-                            else {
-                                std::cout << "Need at least 2 points to finalize a Bezier Curve.\n";
-                            }
-                        }
-                        else if (button == 2) {
-                            m_tempControlPoints.clear();
-                            std::cout << "Bezier Curve canceled.\n";
-                        }
+
+                bool prevSelected = (m_selectedShape != nullptr);
+
+                // Unified hit detection for any shape or bezier control point
+                if (button == 0) {
+                    int bzCp;
+                    BezierCurve* bzHit = findBezierCurveNear(tx, ty, bzCp);
+                    if (bzHit) {
+                        m_selectedShape = bzHit;
+                        m_selectedHandleIndex = (bzCp >= 0) ? bzCp : -1;
+                        m_isDraggingHandle = true;
+                        m_dragStartMouse = { tx, ty };
+                        m_dragStartPoints = m_selectedShape->getControlPoints();
+                        m_pressedOnHandle = true;
+                        std::cout << "Selected Bezier. handle=" << m_selectedHandleIndex << "\n";
+                        return;
                     }
-                    else if (m_editMode == 1) { // Modo editar Bézier (mantener compatibilidad)
-                        if (button == 0) {
-                            int cpIndex;
-                            BezierCurve* curve = findBezierCurveNear(tx, ty, cpIndex);
-                            if (curve && cpIndex >= 0) {
-                                m_editingCurve = curve;
-                                m_selectedControlPoint = cpIndex;
-                                m_isDraggingControlPoint = true;
-                                m_originalMousePos = { tx, ty };
-                                m_pressedOnHandle = true; // <-- añadir
-                                std::cout << "Selected control point " << cpIndex << "\n";
-                            }
-                            else if (curve && cpIndex < 0) {
-                                m_editingCurve = curve;
-                                m_selectedControlPoint = -1;
-                                m_pressedOnHandle = true; // <-- añadir (click sobre curva)
-                                std::cout << "Selected entire curve\n";
-                            }
-                        }
-                    }
-                }
-                else {
+
                     int handleIdx;
-                    Shape* hit = findShapeAt(tx, ty, handleIdx);
-                    if (hit) {
-                        m_selectedShape = hit;
+                    Shape* sHit = findShapeAt(tx, ty, handleIdx);
+                    if (sHit) {
+                        m_selectedShape = sHit;
                         m_selectedHandleIndex = handleIdx;
                         m_isDraggingHandle = true;
                         m_dragStartMouse = { tx, ty };
                         m_dragStartPoints = m_selectedShape->getControlPoints();
                         m_pressedOnHandle = true;
                         std::cout << "Selected shape. handle=" << handleIdx << "\n";
-                        // Importante: retornar evita que se procese la creacion de triángulos u otras figuras
-                        // provocada por este mismo clic.
                         return;
                     }
-                    
+
+                    // Click on empty background
+                    if (prevSelected) {
+                        // deselect and do not start creation
+                        m_selectedShape = nullptr;
+                        m_selectedHandleIndex = -1;
+                        m_pressedOnHandle = false;
+                        m_isCreatingShape = false;
+                        return;
+                    }
+                }
+
+                if (m_drawMode == 4) { // Bezier mode (creación con m_tempControlPoints)
+                    if (button == 0) {
+                        m_tempControlPoints.push_back({ tx, ty });
+                        std::cout << "Added control point (" << tx << ", " << ty
+                            << "). Total: " << m_tempControlPoints.size() << "\n";
+                        // not a normal "shape creation" for m_isCreatingShape
+                        m_isCreatingShape = false;
+                    }
+                    else if (button == 1) {
+                        if (m_tempControlPoints.size() >= 2) {
+                            auto bz = std::make_unique<BezierCurve>();
+                            bz->controlPoints = m_tempControlPoints;
+                            bz->borderColor = m_borderColor;
+                            bz->fillColor = m_fillColor;
+                            bz->thickness = m_lineThickness;
+                            bz->filled = false;
+                            m_shapes.push_back(std::move(bz));
+                            std::cout << "Bezier Curve finalized with "
+                                << m_tempControlPoints.size() << " points.\n";
+                            m_tempControlPoints.clear();
+                        }
+                        else {
+                            std::cout << "Need at least 2 points to finalize a Bezier Curve.\n";
+                        }
+                    }
+                    else if (button == 2) {
+                        m_tempControlPoints.clear();
+                        std::cout << "Bezier Curve canceled.\n";
+                        m_isCreatingShape = false;
+                    }
+                }
+                else {
                     // Modo general: creación o selección/arrastre de figuras existentes
                     if (m_drawMode < 3) {
                         if (button == 0)
@@ -967,6 +963,7 @@ public:
                             m_y0 = ty;
                             m_x1 = m_x0;
                             m_y1 = m_y0;
+                            m_isCreatingShape = true;
                             std::cout << "Inicio de figura en (" << m_x0 << ", " << m_y0 << ")\n";
                         }
                     }
@@ -993,28 +990,6 @@ public:
                             }
                         }
                     }
-
-                    // Selección / inicio de drag sobre figuras existentes (solo con botón izquierdo)
-                    if (button == 0) {
-                        int handleIdx;
-                        Shape* s = findShapeAt(tx, ty, handleIdx);
-                        if (s) {
-                            m_selectedShape = s;
-                            m_selectedHandleIndex = handleIdx; // -1 mover, >=0 handle index
-                            m_isDraggingHandle = true;
-                            m_dragStartMouse = { tx, ty };
-                            m_dragStartPoints = m_selectedShape->getControlPoints();
-                            m_pressedOnHandle = true; // <-- añadir
-                            std::cout << "Selected shape. handle=" << handleIdx << "\n";
-                        }
-                        else {
-                            // click en vacío -> deseleccionar
-                            m_selectedShape = nullptr;
-                            m_selectedHandleIndex = -1;
-                            m_isDraggingHandle = false;
-                            m_pressedOnHandle = false; // <-- asegurar limpio
-                        }
-                    }
                 }
             }
             else if (action == GLFW_RELEASE)
@@ -1035,7 +1010,7 @@ public:
                     m_isDraggingControlPoint = false;
                 }
                 else if (m_drawMode != 3 && m_drawMode != 4) {
-                    if (button == 0)
+                    if (button == 0 && m_isCreatingShape)
                     {
                         m_x1 = tx;
                         m_y1 = ty;
@@ -1083,6 +1058,7 @@ public:
                         }
 
                         m_x0 = -1; m_y0 = -1; m_x1 = -1; m_y1 = -1;
+                        m_isCreatingShape = false;
                     }
                 }
 
@@ -1104,7 +1080,7 @@ public:
         int xpos = static_cast<int>(xpos_d);
         int ypos = height - 1 - static_cast<int>(ypos_d);
 
-        // Edición de curvas Bézier (modo legacy)
+        // Edición de curvas Bézier (dragging puntos) se maneja con la rutina genérica:
         if (m_drawMode == 4 && m_editMode == 1 && m_isDraggingControlPoint && m_editingCurve && m_selectedControlPoint >= 0) {
             m_editingCurve->controlPoints[m_selectedControlPoint] = { xpos, ypos };
         }
@@ -1188,71 +1164,43 @@ public:
             ImGui::Separator();
             ImGui::TextWrapped("Bezier Curve mode:");
 
-            const char* editModes[] = { "Create", "Edit" };
-            ImGui::Text("Mode:");
-            ImGui::RadioButton("Create", &m_editMode, 0); ImGui::SameLine();
-            ImGui::RadioButton("Edit", &m_editMode, 1);
-
-            // Controles de color para los puntos de control de Bézier
-            ImGui::Separator();
-            ImGui::Text("Control Point Colors:");
-
-            float controlPointCol[4] = {
-                m_controlPointColor.r / 255.0f,
-                m_controlPointColor.g / 255.0f,
-                m_controlPointColor.b / 255.0f,
-                m_controlPointColor.a / 255.0f
-            };
-            if (ImGui::ColorEdit4("Normal Point", controlPointCol)) {
-                m_controlPointColor.r = static_cast<unsigned char>(controlPointCol[0] * 255.0f);
-                m_controlPointColor.g = static_cast<unsigned char>(controlPointCol[1] * 255.0f);
-                m_controlPointColor.b = static_cast<unsigned char>(controlPointCol[2] * 255.0f);
-                m_controlPointColor.a = static_cast<unsigned char>(controlPointCol[3] * 255.0f);
-            }
-
-            float selectedControlPointCol[4] = {
-                m_selectedControlPointColor.r / 255.0f,
-                m_selectedControlPointColor.g / 255.0f,
-                m_selectedControlPointColor.b / 255.0f,
-                m_selectedControlPointColor.a / 255.0f
-            };
-            if (ImGui::ColorEdit4("Selected Point", selectedControlPointCol)) {
-                m_selectedControlPointColor.r = static_cast<unsigned char>(selectedControlPointCol[0] * 255.0f);
-                m_selectedControlPointColor.g = static_cast<unsigned char>(selectedControlPointCol[1] * 255.0f);
-                m_selectedControlPointColor.b = static_cast<unsigned char>(selectedControlPointCol[2] * 255.0f);
-                m_selectedControlPointColor.a = static_cast<unsigned char>(selectedControlPointCol[3] * 255.0f);
-            }
-
-            float controlPolygonCol[4] = {
-                m_controlPolygonColor.r / 255.0f,
-                m_controlPolygonColor.g / 255.0f,
-                m_controlPolygonColor.b / 255.0f,
-                m_controlPolygonColor.a / 255.0f
-            };
-            if (ImGui::ColorEdit4("Polygon Lines", controlPolygonCol)) {
-                m_controlPolygonColor.r = static_cast<unsigned char>(controlPolygonCol[0] * 255.0f);
-                m_controlPolygonColor.g = static_cast<unsigned char>(controlPolygonCol[1] * 255.0f);
-                m_controlPolygonColor.b = static_cast<unsigned char>(controlPolygonCol[2] * 255.0f);
-                m_controlPolygonColor.a = static_cast<unsigned char>(controlPolygonCol[3] * 255.0f);
-            }
-
-            ImGui::Separator();
-
-            if (m_editMode == 0) {
+            if (m_drawMode == 4) {
                 ImGui::TextWrapped("- Left click: add control point");
                 ImGui::TextWrapped("- Right click: finalize curve");
                 ImGui::TextWrapped("- Space click: cancel curve");
                 ImGui::Text("Control points: %d", (int)m_tempControlPoints.size());
             }
-            else {
-                ImGui::TextWrapped("- Click on a control point to drag it");
-                ImGui::TextWrapped("- Press E to toggle between Create/Edit modes");
-                if (m_editingCurve) {
-                    ImGui::Text("Editing curve with %d points", (int)m_editingCurve->controlPoints.size());
-                    if (m_selectedControlPoint >= 0) {
-                        ImGui::Text("Selected point: %d", m_selectedControlPoint);
-                    }
-                }
+        }
+
+        // Existing Bezier-mode color editors remain for legacy; add global editors when a shape is selected
+        if (m_selectedShape) {
+            ImGui::Separator();
+            ImGui::Text("Control Point Colors (selected shape):");
+
+            float selControlPointCol[4] = {
+                m_selectedControlPointColor.r / 255.0f,
+                m_selectedControlPointColor.g / 255.0f,
+                m_selectedControlPointColor.b / 255.0f,
+                m_selectedControlPointColor.a / 255.0f
+            };
+            if (ImGui::ColorEdit4("Selected CP Color", selControlPointCol)) {
+                m_selectedControlPointColor.r = static_cast<unsigned char>(selControlPointCol[0] * 255.0f);
+                m_selectedControlPointColor.g = static_cast<unsigned char>(selControlPointCol[1] * 255.0f);
+                m_selectedControlPointColor.b = static_cast<unsigned char>(selControlPointCol[2] * 255.0f);
+                m_selectedControlPointColor.a = static_cast<unsigned char>(selControlPointCol[3] * 255.0f);
+            }
+
+            float normalControlPointCol[4] = {
+                m_controlPointColor.r / 255.0f,
+                m_controlPointColor.g / 255.0f,
+                m_controlPointColor.b / 255.0f,
+                m_controlPointColor.a / 255.0f
+            };
+            if (ImGui::ColorEdit4("Normal CP Color", normalControlPointCol)) {
+                m_controlPointColor.r = static_cast<unsigned char>(normalControlPointCol[0] * 255.0f);
+                m_controlPointColor.g = static_cast<unsigned char>(normalControlPointCol[1] * 255.0f);
+                m_controlPointColor.b = static_cast<unsigned char>(normalControlPointCol[2] * 255.0f);
+                m_controlPointColor.a = static_cast<unsigned char>(normalControlPointCol[3] * 255.0f);
             }
         }
 
@@ -1261,11 +1209,11 @@ public:
         ImGui::Separator();
 
         float borderCol[4] = {
-            m_borderColor.r / 255.0f,
-            m_borderColor.g / 255.0f,
-            m_borderColor.b / 255.0f,
-            m_borderColor.a / 255.0f
-        };
+             m_borderColor.r / 255.0f,
+             m_borderColor.g / 255.0f,
+             m_borderColor.b / 255.0f,
+             m_borderColor.a / 255.0f
+         };
         if (ImGui::ColorEdit4("Border Color", borderCol)) {
             m_borderColor.r = static_cast<unsigned char>(borderCol[0] * 255.0f);
             m_borderColor.g = static_cast<unsigned char>(borderCol[1] * 255.0f);
