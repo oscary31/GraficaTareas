@@ -847,9 +847,39 @@ public:
             }
 
             // Tecla Espacio para cancelar la creación de la curva Bezier
-            if (key == GLFW_KEY_SPACE && m_drawMode == 4 && !m_tempControlPoints.empty()) {
-                m_tempControlPoints.clear();
-                std::cout << "Bezier Curve creation canceled.\n";
+            if (key == GLFW_KEY_SPACE ) {
+                if (m_drawMode == 4 && !m_tempControlPoints.empty())
+                {
+                    m_tempControlPoints.clear();
+                    std::cout << "Bezier Curve creation canceled.\n";
+                }
+
+                if (m_drawMode == 3 && m_triClicks > 0 && m_triClicks < 3)
+                {
+                    m_triClicks = 0;
+					std::cout << "Triangle creation canceled.\n";
+                    
+                }
+                
+            }
+
+			// Tecla DEL para borrar la figura seleccionada
+            if (key == GLFW_KEY_DELETE || key == GLFW_KEY_BACKSPACE) {
+                if (m_selectedShape) {
+                    auto it = std::remove_if(m_shapes.begin(), m_shapes.end(),
+                        [this](const std::unique_ptr<Shape>& s) {
+                            return s.get() == m_selectedShape;
+                        });
+                    if (it != m_shapes.end()) {
+                        m_shapes.erase(it, m_shapes.end());
+                        std::cout << "Selected shape deleted.\n";
+                    }
+                    m_selectedHandleIndex = -1;
+                    m_isDraggingHandle = false;
+                    m_selectedShape = nullptr;
+				}
+                
+                
             }
         }
         else if (action == GLFW_RELEASE)
@@ -1158,20 +1188,21 @@ public:
 
         if (m_drawMode == 3) {
             ImGui::Separator();
-            ImGui::TextWrapped("Triangle mode: click three times to place the three vertices. Current clicks: %d", m_triClicks);
-            if (ImGui::Button("Reset Triangle Clicks")) m_triClicks = 0;
+            ImGui::TextWrapped("Triangle mode:");
+            ImGui::TextWrapped("- Click three times to place the three vertices.");
+            ImGui::TextWrapped("- Space click: Cancel triangle");
+            ImGui::TextWrapped("- Current clicks: %d", m_triClicks);
+
         }
 
         if (m_drawMode == 4) {
             ImGui::Separator();
             ImGui::TextWrapped("Bezier Curve mode:");
-
-            if (m_drawMode == 4) {
-                ImGui::TextWrapped("- Left click: add control point");
-                ImGui::TextWrapped("- Right click: finalize curve");
-                ImGui::TextWrapped("- Space click: cancel curve");
-                ImGui::Text("Control points: %d", (int)m_tempControlPoints.size());
-            }
+            ImGui::TextWrapped("- Left click: Add control point");
+            ImGui::TextWrapped("- Right click: Finalize curve");
+            ImGui::TextWrapped("- Space click: Cancel curve");
+            ImGui::Text("Control points: %d", (int)m_tempControlPoints.size());
+            
         }
 
         // Existing Bezier-mode color editors remain for legacy; add global editors when a shape is selected
