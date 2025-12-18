@@ -24,7 +24,7 @@ private:
     RGBA m_controlPointColor = { 255, 119, 0, 255 };        // Naranja
     RGBA m_selectedControlPointColor = { 0, 119, 255, 255 }; // Azul
     RGBA m_controlPolygonColor = { 136, 136, 136, 255 };      // Gris para las líneas
-    RGBA m_selectionHandleColor = m_controlPointColor;       // Cyan para handles
+    RGBA m_selectionHandleColor = m_controlPointColor;       // handles
 
     // Colores de fondo
     float m_bgColorArray[4] = { 201.0f / 255.0f, 201.0f / 255.0f, 201.0f / 255.0f, 1.0f };
@@ -734,7 +734,8 @@ public:
                          ymin = std::min(ymin, p.second);
                          ymax = std::max(ymax, p.second);
                      }
-                     drawRectangleOutline(xmin - 6, ymin - 6, xmax + 6, ymax + 6, m_selectionHandleColor, 1);
+                     m_selectionHandleColor = m_controlPointColor;
+                     drawRectangleOutline(xmin - 8, ymin - 8, xmax + 8, ymax + 8, m_selectionHandleColor, 1);
                  }
              }
          }
@@ -1205,37 +1206,62 @@ public:
             
         }
 
-        // Existing Bezier-mode color editors remain for legacy; add global editors when a shape is selected
-        
 
         ImGui::Separator();
         ImGui::SliderInt("Line Thickness", &m_lineThickness, 1, 31);
+
         ImGui::Separator();
         ImGui::Text("Shape Colors:");
-        float borderCol[4] = {
-             m_borderColor.r / 255.0f,
-             m_borderColor.g / 255.0f,
-             m_borderColor.b / 255.0f,
-             m_borderColor.a / 255.0f
-         };
+        // If a shape is selected, show its colors in the main editors' preview.
+        float borderCol[4];
+        if (m_selectedShape) {
+            borderCol[0] = m_selectedShape->borderColor.r / 255.0f;
+            borderCol[1] = m_selectedShape->borderColor.g / 255.0f;
+            borderCol[2] = m_selectedShape->borderColor.b / 255.0f;
+            borderCol[3] = m_selectedShape->borderColor.a / 255.0f;
+        }
+        else {
+            borderCol[0] = m_borderColor.r / 255.0f;
+            borderCol[1] = m_borderColor.g / 255.0f;
+            borderCol[2] = m_borderColor.b / 255.0f;
+            borderCol[3] = m_borderColor.a / 255.0f;
+        }
+
         if (ImGui::ColorEdit4("Border Color", borderCol)) {
+            // update global
             m_borderColor.r = static_cast<unsigned char>(borderCol[0] * 255.0f);
             m_borderColor.g = static_cast<unsigned char>(borderCol[1] * 255.0f);
             m_borderColor.b = static_cast<unsigned char>(borderCol[2] * 255.0f);
             m_borderColor.a = static_cast<unsigned char>(borderCol[3] * 255.0f);
+            // also update selected shape if present
+            if (m_selectedShape) {
+                m_selectedShape->borderColor = m_borderColor;
+            }
         }
 
-        float fillCol[4] = {
-            m_fillColor.r / 255.0f,
-            m_fillColor.g / 255.0f,
-            m_fillColor.b / 255.0f,
-            m_fillColor.a / 255.0f
-        };
+        float fillCol[4];
+        if (m_selectedShape && m_selectedShape->filled) {
+            fillCol[0] = m_selectedShape->fillColor.r / 255.0f;
+            fillCol[1] = m_selectedShape->fillColor.g / 255.0f;
+            fillCol[2] = m_selectedShape->fillColor.b / 255.0f;
+            fillCol[3] = m_selectedShape->fillColor.a / 255.0f;
+        }
+        else {
+            fillCol[0] = m_fillColor.r / 255.0f;
+            fillCol[1] = m_fillColor.g / 255.0f;
+            fillCol[2] = m_fillColor.b / 255.0f;
+            fillCol[3] = m_fillColor.a / 255.0f;
+        }
+
         if (ImGui::ColorEdit4("Fill Color", fillCol)) {
             m_fillColor.r = static_cast<unsigned char>(fillCol[0] * 255.0f);
             m_fillColor.g = static_cast<unsigned char>(fillCol[1] * 255.0f);
             m_fillColor.b = static_cast<unsigned char>(fillCol[2] * 255.0f);
             m_fillColor.a = static_cast<unsigned char>(fillCol[3] * 255.0f);
+            // Apply to selected shape if it supports fill
+            if (m_selectedShape && m_selectedShape->filled) {
+                m_selectedShape->fillColor = m_fillColor;
+            }
         }
 
         if (m_selectedShape) {
