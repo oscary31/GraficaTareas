@@ -298,6 +298,55 @@ private:
     // Nuevo: indica si se inició la creación de una figura (press en lienzo)
     bool m_isCreatingShape = false;
 
+    // Layer/context helpers
+    void bringSelectedForward() {
+        if (!m_selectedShape) return;
+        for (size_t i = 0; i < m_shapes.size(); ++i) {
+            if (m_shapes[i].get() == m_selectedShape) {
+                if (i + 1 < m_shapes.size()) {
+                    std::swap(m_shapes[i], m_shapes[i + 1]);
+                }
+                return;
+            }
+        }
+    }
+
+    void sendSelectedBackward() {
+        if (!m_selectedShape) return;
+        for (size_t i = 0; i < m_shapes.size(); ++i) {
+            if (m_shapes[i].get() == m_selectedShape) {
+                if (i > 0) {
+                    std::swap(m_shapes[i], m_shapes[i - 1]);
+                }
+                return;
+            }
+        }
+    }
+
+    void bringSelectedToFront() {
+        if (!m_selectedShape) return;
+        for (size_t i = 0; i < m_shapes.size(); ++i) {
+            if (m_shapes[i].get() == m_selectedShape) {
+                auto tmp = std::move(m_shapes[i]);
+                m_shapes.erase(m_shapes.begin() + i);
+                m_shapes.push_back(std::move(tmp));
+                return;
+            }
+        }
+    }
+
+    void sendSelectedToBack() {
+        if (!m_selectedShape) return;
+        for (size_t i = 0; i < m_shapes.size(); ++i) {
+            if (m_shapes[i].get() == m_selectedShape) {
+                auto tmp = std::move(m_shapes[i]);
+                m_shapes.erase(m_shapes.begin() + i);
+                m_shapes.insert(m_shapes.begin(), std::move(tmp));
+                return;
+            }
+        }
+    }
+
 public:
     CMyTest() {};
     ~CMyTest() {};
@@ -1030,7 +1079,7 @@ public:
                 mouseButtonsDown[button] = false;
 
                 // Si el release ocurre tras arrastrar un handle/punto de control,
-                // finalizamos el drag y evitamos ejecutar la lógica de "finalizar figura".
+                // finalizamos el drag y evitamos ejecutar la lógica de "finalizar figura". 
                 if (button == 0 && (m_isDraggingHandle || m_isDraggingControlPoint)) {
                     m_isDraggingHandle = false;
                     m_isDraggingControlPoint = false;
@@ -1136,9 +1185,38 @@ public:
                     if (m_selectedHandleIndex < (int)m_dragStartPoints.size()) {
                         int origx = m_dragStartPoints[m_selectedHandleIndex].first;
                         int origy = m_dragStartPoints[m_selectedHandleIndex].second;
-                        m_selectedShape->setControlPoint(m_selectedHandleIndex, origx + dx, origy + dy);
-                    }
-                }
+
+                        int newX = origx + dx;
+                        int newY = origy + dy;
+
+                        // If Shift is pressed, constrain ellipse->circle and rectangle->square
+                        bool shift = (glfwGetKey(m_window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) || (glfwGetKey(m_window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+                        if (shift) {
+                            // Only apply for Ellipse and Rectangle corner handles
+                            Rectangle* rc = dynamic_cast<Rectangle*>(m_selectedShape);
+                            Ellipse* el = dynamic_cast<Ellipse*>(m_selectedShape);
+                            if (rc || el) {
+                                int idx = m_selectedHandleIndex;
+                                // opposite corner index (corners are 0..3)
+                                int opIdx = (idx + 2) % 4;
+                                if (opIdx < (int)m_dragStartPoints.size()) {
+                                    int opx = m_dragStartPoints[opIdx].first;
+                                    int opy = m_dragStartPoints[opIdx].second;
+
+                                    int dxAbs = std::abs(newX - opx);
+                                    int dyAbs = std::abs(newY - opy);
+                                    int d = std::max(dxAbs, dyAbs);
+                                    int sx = (newX >= opx) ? 1 : -1;
+                                    int sy = (newY >= opy) ? 1 : -1;
+                                    newX = opx + sx * d;
+                                    newY = opy + sy * d;
+                                }
+                            }
+                        }
+
+                        m_selectedShape->setControlPoint(m_selectedHandleIndex, newX, newY);
+                     }
+                  }
             }
             else if (m_drawMode != 3) {
                 if (mouseButtonsDown[0])
@@ -1319,6 +1397,24 @@ public:
             m_selectedControlPoint = -1;
             m_selectedShape = nullptr;
             m_selectedHandleIndex = -1;
+        }
+
+        // Nuevos botones para manipulación de capas
+        if (m_selectedShape) {
+            ImGui::Separator();
+            ImGui::Text("Layer Controls:");
+            if (ImGui::Button("Bring Forward")) {
+                bringSelectedForward();
+            }
+            if (ImGui::Button("Send Backward")) {
+                sendSelectedBackward();
+            }
+            if (ImGui::Button("Bring to Front")) {
+                bringSelectedToFront();
+            }
+            if (ImGui::Button("Send to Back")) {
+                sendSelectedToBack();
+            }
         }
 
         ImGui::End();
