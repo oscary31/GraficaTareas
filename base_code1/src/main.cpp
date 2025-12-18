@@ -192,6 +192,62 @@ private:
     struct BezierCurve : public Shape {
         std::vector<std::pair<int, int>> controlPoints;
 
+        // Elevate degree by 1 (in-place)
+        void elevateDegree() {
+            int n = (int)controlPoints.size() - 1;
+            if (n < 0) return;
+            std::vector<std::pair<int,int>> Q;
+            Q.reserve(n + 2);
+            Q.push_back(controlPoints[0]);
+            for (int i = 1; i <= n; ++i) {
+                float alpha = (float)i / (float)(n + 1);
+                float x = alpha * controlPoints[i-1].first + (1.0f - alpha) * controlPoints[i].first;
+                float y = alpha * controlPoints[i-1].second + (1.0f - alpha) * controlPoints[i].second;
+                Q.push_back({ static_cast<int>(std::round(x)), static_cast<int>(std::round(y)) });
+            }
+            Q.push_back(controlPoints[n]);
+            controlPoints = std::move(Q);
+        }
+
+        // Subdivide at parameter t in [0,1], returns pair(left,right) control point lists
+        std::pair<std::vector<std::pair<int,int>>, std::vector<std::pair<int,int>>> subdivideAt(float t) const {
+            std::vector<std::vector<std::pair<float,float>>> b;
+            int n = (int)controlPoints.size() - 1;
+            if (n < 0) return { {}, {} };
+            b.resize(n+1);
+            // level 0
+            b[0].resize(n+1);
+            for (int i = 0; i <= n; ++i) {
+                b[0][i].first = (float)controlPoints[i].first;
+                b[0][i].second = (float)controlPoints[i].second;
+            }
+            // build table
+            for (int r = 1; r <= n; ++r) {
+                b[r].resize(n+1-r);
+                for (int i = 0; i <= n - r; ++i) {
+                    float x = (1.0f - t) * b[r-1][i].first + t * b[r-1][i+1].first;
+                    float y = (1.0f - t) * b[r-1][i].second + t * b[r-1][i+1].second;
+                    b[r][i].first = x;
+                    b[r][i].second = y;
+                }
+            }
+
+            std::vector<std::pair<int,int>> left, right;
+            left.reserve(n+1);
+            right.reserve(n+1);
+            // left: b[0][0], b[1][0], ..., b[n][0]
+            for (int r = 0; r <= n; ++r) {
+                left.push_back({ static_cast<int>(std::round(b[r][0].first)), static_cast<int>(std::round(b[r][0].second)) });
+            }
+            // right: b[n][0], b[n-1][1], ..., b[0][n]
+            for (int r = n; r >= 0; --r) {
+                int idx = n - r;
+                auto p = b[r][idx];
+                right.push_back({ static_cast<int>(std::round(p.first)), static_cast<int>(std::round(p.second)) });
+            }
+            return { left, right };
+        }
+
         void draw(CMyTest* renderer) override {
             if (controlPoints.size() < 2) return;
 
@@ -264,6 +320,9 @@ private:
     int m_selectedControlPoint = -1;
     std::pair<int, int> m_originalMousePos;
     bool m_isDraggingControlPoint = false;
+
+    // Bezier subdivision parameter
+    float m_bezierT = 0.5f;
 
     // Lista unificada de todas las figuras
     std::vector<std::unique_ptr<Shape>> m_shapes;
@@ -1342,7 +1401,7 @@ public:
             }
         }
 
-        if (m_selectedShape) {
+        if (m_selectedShape) {          
             ImGui::Separator();
             ImGui::Text("Control Point Colors:");
             float normalControlPointCol[4] = {
@@ -1372,7 +1431,73 @@ public:
             }
         }
 
-        ImGui::Separator();
+        // If selected shape is Bezier, show subdivision/elevation UI
+        BezierCurve* bz = dynamic_cast<BezierCurve*>(m_selectedShape);
+        if (bz) {
+            ImGui::Separator();
+            ImGui::Text("Bezier Curve Tools (degree: %d)", (int)bz->controlPoints.size() - 1);
+            ImGui::SliderFloat("t (subdivide)", &m_bezierT, 0.0f, 1.0f, "%.3f");
+            ImGui::SameLine(); ImGui::Text("Value: %.3f", m_bezierT);
+            if (ImGui::Button("Subdivide at t")) {
+                // locate selected shape index
+                size_t idx = 0;
+                for (; idx < m_shapes.size(); ++idx) {
+                    if (m_shapes[idx].get() == m_selectedShape) break;
+                }
+                if (idx < m_shapes.size()) {
+                    auto pr = bz->subdivideAt(m_bezierT);
+                    auto left = std::make_unique<BezierCurve>();
+                    left->controlPoints = pr.first;
+                    left->borderColor = bz->borderColor;
+                    left->fillColor = bz->fillColor;
+                    left->thickness = bz->thickness;
+                    left->filled = bz->filled;
+
+                    auto right = std::make_unique<BezierCurve>();
+                    right->controlPoints = pr.second;
+                    right->borderColor = bz->borderColor;
+                    right->fillColor = bz->fillColor;
+                    right->thickness = bz->thickness;
+                    right->filled = bz->filled;
+
+                    // replace original with left,right
+                    m_shapes.erase(m_shapes.begin() + idx);
+                    m_shapes.insert(m_shapes.begin() + idx, std::move(right));
+                    m_shapes.insert(m_shapes.begin() + idx, std::move(left));
+                    // select the left piece
+                    m_selectedShape = m_shapes[idx].get();
+                    m_selectedHandleIndex = -1;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Elevate Degree")) {
+                bz->elevateDegree();
+            }
+        }
+            
+
+        // Nuevos botones para manipulación de capas
+        if (m_selectedShape) {
+            ImGui::Separator();
+            ImGui::Text("Layer Controls:");
+            if (ImGui::Button("Bring Forward")) {
+                bringSelectedForward();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Send Backward")) {
+                sendSelectedBackward();
+            }
+
+            if (ImGui::Button("Bring to Front")) {
+                bringSelectedToFront();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Send to Back")) {
+                sendSelectedToBack();
+            }
+        }
+
+		ImGui::Separator();
         ImGui::Text("Background Color:");
         if (ImGui::ColorEdit4("##bgcolor", m_bgColorArray)) {
             // Actualizar struct RGBA a partir del arreglo float
@@ -1386,8 +1511,7 @@ public:
                 std::fill(m_buffer.begin(), m_buffer.end(), m_bgColor);
             }
         }
-            
-        
+
         ImGui::Separator();
         if (ImGui::Button("Clear screen")) {
             m_shapes.clear();
@@ -1397,24 +1521,6 @@ public:
             m_selectedControlPoint = -1;
             m_selectedShape = nullptr;
             m_selectedHandleIndex = -1;
-        }
-
-        // Nuevos botones para manipulación de capas
-        if (m_selectedShape) {
-            ImGui::Separator();
-            ImGui::Text("Layer Controls:");
-            if (ImGui::Button("Bring Forward")) {
-                bringSelectedForward();
-            }
-            if (ImGui::Button("Send Backward")) {
-                sendSelectedBackward();
-            }
-            if (ImGui::Button("Bring to Front")) {
-                bringSelectedToFront();
-            }
-            if (ImGui::Button("Send to Back")) {
-                sendSelectedToBack();
-            }
         }
 
         ImGui::End();
