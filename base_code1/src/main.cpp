@@ -1,4 +1,5 @@
 ﻿#include "PixelRender.h"
+#include "Shape.h" 
 #include <iostream>
 #include <vector>
 #include <set>
@@ -6,6 +7,9 @@
 #include <memory>
 #include <imgui.h>
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <cstring>
 
 class CMyTest : public CPixelRender
 {
@@ -21,301 +25,17 @@ private:
     bool m_useFilledShapes = false;
 
     // Colores para los puntos de control de Bézier y selección (unificados)
-    RGBA m_controlPointColor = { 255, 119, 0, 255 };        // Naranja
-    RGBA m_selectedControlPointColor = { 0, 119, 255, 255 }; // Azul
-    RGBA m_controlPolygonColor = { 136, 136, 136, 255 };      // Gris para las líneas
+   // RGBA m_controlPointColor = { 255, 119, 0, 255 };        // Naranja
+   // RGBA m_selectedControlPointColor = { 0, 119, 255, 255 }; // Azul
+   // RGBA m_controlPolygonColor = { 136, 136, 136, 255 };      // Gris para las líneas
     RGBA m_selectionHandleColor = m_controlPointColor;       // handles
 
     // Colores de fondo
     float m_bgColorArray[4] = { 201.0f / 255.0f, 201.0f / 255.0f, 201.0f / 255.0f, 1.0f };
     RGBA m_bgColor = { 216, 216, 216, 255 };
 
-    // Base class para todas las figuras
-    struct Shape {
-        RGBA borderColor;
-        RGBA fillColor;
-        int thickness;
-        bool filled;
-        virtual ~Shape() = default;
-        virtual void draw(CMyTest* renderer) = 0;
-
-        // Nuevos métodos para edición y selección
-        virtual std::vector<std::pair<int, int>> getControlPoints() { return {}; }
-        virtual void setControlPoint(int idx, int x, int y) {}
-        virtual void moveBy(int dx, int dy) {}
-        virtual bool containsPoint(int x, int y) { return false; }
-    };
-
-    struct Line : public Shape {
-        int x0, y0, x1, y1;
-        void draw(CMyTest* renderer) override {
-            renderer->drawLine(x0, y0, x1, y1, borderColor, thickness);
-        }
-        std::vector<std::pair<int, int>> getControlPoints() override {
-            return { {x0,y0}, {x1,y1} };
-        }
-        void setControlPoint(int idx, int x, int y) override {
-            if (idx == 0) { x0 = x; y0 = y; }
-            else if (idx == 1) { x1 = x; y1 = y; }
-        }
-        void moveBy(int dx, int dy) override {
-            x0 += dx; y0 += dy; x1 += dx; y1 += dy;
-        }
-        bool containsPoint(int x, int y) override {
-            // distancia punto-segmento
-            auto dist2 = [](int x0, int y0, int x1, int y1, int x, int y)->double {
-                double vx = x1 - x0, vy = y1 - y0;
-                double wx = x - x0, wy = y - y0;
-                double c1 = vx * wx + vy * wy;
-                double c2 = vx * vx + vy * vy;
-                double t = (c2 == 0) ? 0.0 : c1 / c2;
-                if (t < 0) t = 0; if (t > 1) t = 1;
-                double px = x0 + t * vx, py = y0 + t * vy;
-                double dx = x - px, dy = y - py;
-                return dx * dx + dy * dy;
-                };
-            const int TOL = 8;
-            return dist2(x0, y0, x1, y1, x, y) <= (double)TOL * TOL;
-        }
-    };
-
-    struct Ellipse : public Shape {
-        int cx, cy;
-        int a, b;
-        void draw(CMyTest* renderer) override {
-            if (filled) {
-                renderer->drawEllipseFilled(cx, cy, a, b, fillColor, borderColor, thickness);
-            }
-            else {
-                renderer->drawEllipseOutline(cx, cy, a, b, borderColor, thickness);
-            }
-        }
-        std::vector<std::pair<int, int>> getControlPoints() override {
-            // usar bounding box 4 esquinas
-            return { {cx - a, cy - b}, {cx + a, cy - b}, {cx + a, cy + b}, {cx - a, cy + b} };
-        }
-        void setControlPoint(int idx, int x, int y) override {
-            auto pts = getControlPoints();
-            if (idx < 0 || idx >= (int)pts.size()) return;
-            std::pair<int, int> other;
-            if (idx == 0) other = pts[2]; // opuesto
-            else if (idx == 1) other = pts[3];
-            else if (idx == 2) other = pts[0];
-            else other = pts[1];
-
-            int xmin = std::min(x, other.first);
-            int xmax = std::max(x, other.first);
-            int ymin = std::min(y, other.second);
-            int ymax = std::max(y, other.second);
-            cx = (xmin + xmax) / 2;
-            cy = (ymin + ymax) / 2;
-            a = std::max(1, (xmax - xmin) / 2);
-            b = std::max(1, (ymax - ymin) / 2);
-        }
-        void moveBy(int dx, int dy) override {
-            cx += dx; cy += dy;
-        }
-        bool containsPoint(int x, int y) override {
-            if (a <= 0 || b <= 0) return false;
-            double dx = (double)(x - cx) / (double)a;
-            double dy = (double)(y - cy) / (double)b;
-            return dx * dx + dy * dy <= 1.0;
-        }
-    };
-
-    struct Rectangle : public Shape {
-        int xmin, ymin, xmax, ymax;
-        void draw(CMyTest* renderer) override {
-            if (filled) {
-                renderer->drawRectangleFilled(xmin, ymin, xmax, ymax, fillColor, borderColor, thickness);
-            }
-            else {
-                renderer->drawRectangleOutline(xmin, ymin, xmax, ymax, borderColor, thickness);
-            }
-        }
-        std::vector<std::pair<int, int>> getControlPoints() override {
-            return { {xmin,ymin}, {xmax,ymin}, {xmax,ymax}, {xmin,ymax} };
-        }
-        void setControlPoint(int idx, int x, int y) override {
-            std::vector<std::pair<int, int>> pts = getControlPoints();
-            if (idx < 0 || idx >= (int)pts.size()) return;
-            if (idx == 0) { xmin = x; ymin = y; }
-            else if (idx == 1) { xmax = x; ymin = y; }
-            else if (idx == 2) { xmax = x; ymax = y; }
-            else { xmin = x; ymax = y; }
-            if (xmin > xmax) std::swap(xmin, xmax);
-            if (ymin > ymax) std::swap(ymin, ymax);
-        }
-        void moveBy(int dx, int dy) override {
-            xmin += dx; xmax += dx; ymin += dy; ymax += dy;
-        }
-        bool containsPoint(int x, int y) override {
-            return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
-        }
-    };
-
-    struct Triangle : public Shape {
-        int x0, y0, x1, y1, x2, y2;
-        void draw(CMyTest* renderer) override {
-            if (filled) {
-                renderer->drawTriangleFilled(x0, y0, x1, y1, x2, y2, fillColor, borderColor, thickness);
-            }
-            else {
-                renderer->drawTriangleOutline(x0, y0, x1, y1, x2, y2, borderColor, thickness);
-            }
-        }
-        std::vector<std::pair<int, int>> getControlPoints() override {
-            return { {x0,y0}, {x1,y1}, {x2,y2} };
-        }
-        void setControlPoint(int idx, int x, int y) override {
-            if (idx == 0) { x0 = x; y0 = y; }
-            else if (idx == 1) { x1 = x; y1 = y; }
-            else if (idx == 2) { x2 = x; y2 = y; }
-        }
-        void moveBy(int dx, int dy) override {
-            x0 += dx; y0 += dy; x1 += dx; y1 += dy; x2 += dx; y2 += dy;
-        }
-        bool containsPoint(int x, int y) override {
-            auto sign = [](int px, int py, int ax, int ay, int bx, int by) -> float {
-                return (px - bx) * (ay - by) - (ax - bx) * (py - by);
-                };
-            float d1 = sign(x, y, x0, y0, x1, y1);
-            float d2 = sign(x, y, x1, y1, x2, y2);
-            float d3 = sign(x, y, x2, y2, x0, y0);
-            bool has_neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-            bool has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-            return !(has_neg && has_pos);
-        }
-    };
-
-    // Definición completa de BezierCurve
-    struct BezierCurve : public Shape {
-        std::vector<std::pair<int, int>> controlPoints;
-
-        // Elevate degree by 1 (in-place)
-        void elevateDegree() {
-            int n = (int)controlPoints.size() - 1;
-            if (n < 0) return;
-            std::vector<std::pair<int,int>> Q;
-            Q.reserve(n + 2);
-            Q.push_back(controlPoints[0]);
-            for (int i = 1; i <= n; ++i) {
-                float alpha = (float)i / (float)(n + 1);
-                float x = alpha * controlPoints[i-1].first + (1.0f - alpha) * controlPoints[i].first;
-                float y = alpha * controlPoints[i-1].second + (1.0f - alpha) * controlPoints[i].second;
-                Q.push_back({ static_cast<int>(std::round(x)), static_cast<int>(std::round(y)) });
-            }
-            Q.push_back(controlPoints[n]);
-            controlPoints = std::move(Q);
-        }
-
-        // Subdivide at parameter t in [0,1], returns pair(left,right) control point lists
-        std::pair<std::vector<std::pair<int,int>>, std::vector<std::pair<int,int>>> subdivideAt(float t) const {
-            std::vector<std::vector<std::pair<float,float>>> b;
-            int n = (int)controlPoints.size() - 1;
-            if (n < 0) return { {}, {} };
-            b.resize(n+1);
-            // level 0
-            b[0].resize(n+1);
-            for (int i = 0; i <= n; ++i) {
-                b[0][i].first = (float)controlPoints[i].first;
-                b[0][i].second = (float)controlPoints[i].second;
-            }
-            // build table
-            for (int r = 1; r <= n; ++r) {
-                b[r].resize(n+1-r);
-                for (int i = 0; i <= n - r; ++i) {
-                    float x = (1.0f - t) * b[r-1][i].first + t * b[r-1][i+1].first;
-                    float y = (1.0f - t) * b[r-1][i].second + t * b[r-1][i+1].second;
-                    b[r][i].first = x;
-                    b[r][i].second = y;
-                }
-            }
-
-            std::vector<std::pair<int,int>> left, right;
-            left.reserve(n+1);
-            right.reserve(n+1);
-            // left: b[0][0], b[1][0], ..., b[n][0]
-            for (int r = 0; r <= n; ++r) {
-                left.push_back({ static_cast<int>(std::round(b[r][0].first)), static_cast<int>(std::round(b[r][0].second)) });
-            }
-            // right: b[n][0], b[n-1][1], ..., b[0][n]
-            for (int r = n; r >= 0; --r) {
-                int idx = n - r;
-                auto p = b[r][idx];
-                right.push_back({ static_cast<int>(std::round(p.first)), static_cast<int>(std::round(p.second)) });
-            }
-            return { left, right };
-        }
-
-        void draw(CMyTest* renderer) override {
-            if (controlPoints.size() < 2) return;
-
-            // 3. Dibujar la Curva (siempre)
-            int segments = 100;
-            std::pair<int, int> p0 = CMyTest::deCasteljau(controlPoints, 0.0f);
-
-            for (int i = 1; i <= segments; ++i) {
-                float t = (float)i / segments;
-                std::pair<int, int> p1 = CMyTest::deCasteljau(controlPoints, t);
-                renderer->drawLine(p0.first, p0.second, p1.first, p1.second, borderColor, thickness);
-                p0 = p1;
-            }
-
-            // Dibujar polígono de control y puntos solo si la curva está seleccionada
-            if (renderer->m_selectedShape == this) {
-                // Polígono de control
-                for (size_t i = 0; i < controlPoints.size() - 1; ++i) {
-                    const auto& pA = controlPoints[i];
-                    const auto& pB = controlPoints[i + 1];
-                    renderer->drawLine(pA.first, pA.second, pB.first, pB.second,
-                        renderer->m_controlPolygonColor, 1);
-                }
-
-                // control points are drawn centrally in update() for all shapes
-            }
-        }
-
-        std::vector<std::pair<int, int>> getControlPoints() override {
-            return controlPoints;
-        }
-        void setControlPoint(int idx, int x, int y) override {
-            if (idx >= 0 && idx < (int)controlPoints.size()) {
-                controlPoints[idx] = { x,y };
-            }
-        }
-        void moveBy(int dx, int dy) override {
-            for (auto& p : controlPoints) { p.first += dx; p.second += dy; }
-        }
-        bool containsPoint(int x, int y) override {
-            // test distancia a la curva muestreada
-            int segments = 80;
-            std::pair<int, int> prev = CMyTest::deCasteljau(controlPoints, 0.0f);
-            const int TOL = 10;
-            for (int i = 1; i <= segments; ++i) {
-                float t = (float)i / segments;
-                std::pair<int, int> cur = CMyTest::deCasteljau(controlPoints, t);
-                // distancia punto a segmento prev-cur
-                auto dist2 = [](int x0, int y0, int x1, int y1, int x, int y)->double {
-                    double vx = x1 - x0, vy = y1 - y0;
-                    double wx = x - x0, wy = y - y0;
-                    double c1 = vx * wx + vy * wy;
-                    double c2 = vx * vx + vy * vy;
-                    double t = (c2 == 0) ? 0.0 : c1 / c2;
-                    if (t < 0) t = 0; if (t > 1) t = 1;
-                    double px = x0 + t * vx, py = y0 + t * vy;
-                    double dx = x - px, dy = y - py;
-                    return dx * dx + dy * dy;
-                    };
-                if (dist2(prev.first, prev.second, cur.first, cur.second, x, y) <= (double)TOL * TOL) return true;
-                prev = cur;
-            }
-            return false;
-        }
-    };
-
     // Para la edición de curvas Bézier
-    int m_editMode = 0; // mantenemos pero ya no obligatorio
+    int m_editMode = 0;
     BezierCurve* m_editingCurve = nullptr;
     int m_selectedControlPoint = -1;
     std::pair<int, int> m_originalMousePos;
@@ -342,19 +62,17 @@ private:
     };
 
     // Modo 4: Bezier
-    int m_controlPointRadius = 5; // unified radius for all control points
+    //int m_controlPointRadius = 5;
     std::vector<std::pair<int, int>> m_tempControlPoints;
 
     // Nueva: selección y arrastre genérico
-    Shape* m_selectedShape = nullptr;
-    int m_selectedHandleIndex = -1; // -1 => mover figura completa, >=0 => handle index
+    //Shape* m_selectedShape = nullptr;
+    //int m_selectedHandleIndex = -1;
     bool m_isDraggingHandle = false;
     std::pair<int, int> m_dragStartMouse;
-    std::vector<std::pair<int, int>> m_dragStartPoints; // snapshot de control points al iniciar drag
+    std::vector<std::pair<int, int>> m_dragStartPoints;
 
-    // Nuevo: indica que el press inicializó sobre un handle / punto de control
     bool m_pressedOnHandle = false;
-    // Nuevo: indica si se inició la creación de una figura (press en lienzo)
     bool m_isCreatingShape = false;
 
     // Layer/context helpers
@@ -407,6 +125,13 @@ private:
     }
 
 public:
+    RGBA m_controlPolygonColor = { 136, 136, 136, 255 };
+    Shape* m_selectedShape = nullptr;
+    RGBA m_controlPointColor = { 255, 119, 0, 255 };
+    RGBA m_selectedControlPointColor = { 0, 119, 255, 255 };
+    int m_controlPointRadius = 5;
+    int m_selectedHandleIndex = -1;
+
     CMyTest() {};
     ~CMyTest() {};
 
@@ -508,8 +233,6 @@ public:
         {
             drawLineBresenham(x1, y1, x0, y0, color, thickness);
         }
-
-        //m_drawnPixels.clear();
     }
 
     void drawLine(int x0, int y0, int x1, int y1, RGBA color, int thickness = 1)
@@ -578,8 +301,6 @@ public:
                 d2 += dx - dy + a2;
             }
         }
-
-        //m_drawnPixels.clear();
     }
 
     void drawRectangleOutline(int x0, int y0, int x1, int y1, RGBA color, int thickness)
@@ -612,28 +333,22 @@ public:
 
     void drawTriangleFilled(int x0, int y0, int x1, int y1, int x2, int y2, RGBA fillColor, RGBA borderColor, int thickness)
     {
-        // Variable auxiliar para acumular los píxeles del borde
         std::set<std::pair<int, int>> borderPixels;
 
-        // Dibujamos cada línea y acumulamos sus píxeles
-        // Línea 1: (x0,y0) -> (x1,y1)
         m_drawnPixels.clear();
         drawLine(x0, y0, x1, y1, borderColor, thickness);
         borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
 
-        // Línea 2: (x1,y1) -> (x2,y2)
         m_drawnPixels.clear();
         drawLine(x1, y1, x2, y2, borderColor, thickness);
         borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
 
-        // Línea 3: (x2,y2) -> (x0,y0)
         m_drawnPixels.clear();
         drawLine(x2, y2, x0, y0, borderColor, thickness);
         borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
 
         m_drawnPixels.clear();
 
-        // Función para verificar si un punto está dentro del triángulo
         auto isInsideTriangle = [](int px, int py, int x0, int y0, int x1, int y1, int x2, int y2) -> bool {
             auto sign = [](int px, int py, int ax, int ay, int bx, int by) -> float {
                 return (px - bx) * (ay - by) - (ax - bx) * (py - by);
@@ -649,20 +364,17 @@ public:
             return !(has_neg && has_pos);
             };
 
-        // Calculamos el bounding box del triángulo
         int xmin = std::min({ x0, x1, x2 });
         int xmax = std::max({ x0, x1, x2 });
         int ymin = std::min({ y0, y1, y2 });
         int ymax = std::max({ y0, y1, y2 });
 
-        // Rellenamos solo los píxeles que están dentro y NO en el borde
         for (int y = ymin; y <= ymax; ++y) {
             if (y < 0 || y >= height) continue;
 
             for (int x = xmin; x <= xmax; ++x) {
                 if (x < 0 || x >= width) continue;
 
-                // Si está dentro del triángulo y NO está en el borde
                 if (isInsideTriangle(x, y, x0, y0, x1, y1, x2, y2) &&
                     borderPixels.find({ x, y }) == borderPixels.end()) {
                     setPixel(x, y, fillColor);
@@ -675,15 +387,11 @@ public:
     {
         if (a <= 0 || b <= 0) return;
 
-        // Primero dibujamos el borde - m_drawnPixels se llena automáticamente
         drawEllipseOutline(cx, cy, a, b, borderColor, thickness);
-
-        // Guardamos TODOS los píxeles del borde (incluyendo los que crecen hacia adentro)
         std::set<std::pair<int, int>> borderPixels = m_drawnPixels;
         m_drawnPixels.clear();
 
-        // Ahora rellenamos, usando un radio generoso
-        int searchRadius = a + b; // Radio de búsqueda
+        int searchRadius = a + b;
 
         for (int y = cy - searchRadius; y <= cy + searchRadius; ++y) {
             if (y < 0 || y >= height) continue;
@@ -691,12 +399,10 @@ public:
             for (int x = cx - searchRadius; x <= cx + searchRadius; ++x) {
                 if (x < 0 || x >= width) continue;
 
-                // Si el píxel está en el borde (incluyendo thickness), saltarlo
                 if (borderPixels.find({ x, y }) != borderPixels.end()) {
                     continue;
                 }
 
-                // Verificar si está dentro de la elipse
                 float dx = static_cast<float>(x - cx) / static_cast<float>(a);
                 float dy = static_cast<float>(y - cy) / static_cast<float>(b);
 
@@ -753,13 +459,11 @@ public:
         return CMyTest::deCasteljau(points, t);
     }
 
-    // Nueva función: busca figura y handle cerca del punto (tx,ty)
     Shape* findShapeAt(int tx, int ty, int& outHandleIndex) {
         const int HANDLE_TOL = 10;
         outHandleIndex = -2;
         for (auto it = m_shapes.rbegin(); it != m_shapes.rend(); ++it) {
             Shape* s = it->get();
-            // primero comprobar handlers
             auto pts = s->getControlPoints();
             for (size_t i = 0; i < pts.size(); ++i) {
                 int dx = pts[i].first - tx;
@@ -769,9 +473,8 @@ public:
                     return s;
                 }
             }
-            // luego comprobación de contenido
             if (s->containsPoint(tx, ty)) {
-                outHandleIndex = -1; // seleccionar figura completa
+                outHandleIndex = -1;
                 return s;
             }
         }
@@ -831,22 +534,22 @@ public:
                 RGBA col = (m_selectedHandleIndex == (int)i) ? m_selectedControlPointColor : m_controlPointColor;
                 drawEllipseFilled(px, py, m_controlPointRadius, m_controlPointRadius, col, col, 1);
             }
-             // Si se seleccionó la figura completa dibujar un bounding box
-             if (m_selectedHandleIndex == -1) {
-                 auto pts2 = m_selectedShape->getControlPoints();
-                 if (!pts2.empty()) {
-                     int xmin = pts2[0].first, xmax = pts2[0].first, ymin = pts2[0].second, ymax = pts2[0].second;
-                     for (auto& p : pts2) {
-                         xmin = std::min(xmin, p.first);
-                         xmax = std::max(xmax, p.first);
-                         ymin = std::min(ymin, p.second);
-                         ymax = std::max(ymax, p.second);
-                     }
-                     m_selectionHandleColor = m_controlPointColor;
-                     drawRectangleOutline(xmin - 8, ymin - 8, xmax + 8, ymax + 8, m_selectionHandleColor, 1);
-                 }
-             }
-         }
+            // Si se seleccionó la figura completa dibujar un bounding box
+            if (m_selectedHandleIndex == -1) {
+                auto pts2 = m_selectedShape->getControlPoints();
+                if (!pts2.empty()) {
+                    int xmin = pts2[0].first, xmax = pts2[0].first, ymin = pts2[0].second, ymax = pts2[0].second;
+                    for (auto& p : pts2) {
+                        xmin = std::min(xmin, p.first);
+                        xmax = std::max(xmax, p.first);
+                        ymin = std::min(ymin, p.second);
+                        ymax = std::max(ymax, p.second);
+                    }
+                    m_selectionHandleColor = m_controlPointColor;
+                    drawRectangleOutline(xmin - 8, ymin - 8, xmax + 8, ymax + 8, m_selectionHandleColor, 1);
+                }
+            }
+        }
 
         if (m_drawMode == 4 && m_tempControlPoints.size() > 0) {
             // Cuando estamos creando (temp control points) dibujamos el polígono/handles aquí
@@ -1523,9 +1226,85 @@ public:
             m_selectedHandleIndex = -1;
         }
 
+        // Botones para guardar y cargar
+        ImGui::Separator();
+        if (ImGui::Button("Save Shapes")) {
+            // Abrir cuadro de diálogo para seleccionar archivo y formato
+            ImGui::OpenPopup("Save Shapes");
+        }
+
+        if (ImGui::BeginPopup("Save Shapes")) {
+            static char filename[128] = "shapes.json";
+
+            // Campo de texto para el nombre del archivo
+            ImGui::InputText("Filename", filename, IM_ARRAYSIZE(filename));
+
+            // Only JSON supported now
+            ImGui::TextDisabled("Only JSON format is supported.");
+
+            // Botón para confirmar guardado
+            if (ImGui::Button("Save")) {
+                std::string fname = filename;
+                std::transform(fname.begin(), fname.end(), fname.begin(), ::tolower);
+                if (fname.find_last_of(".") == std::string::npos) {
+                    // Si no tiene extensión, agregar .json por defecto
+                    fname += ".json";
+                }
+
+                // Guardar en formato JSON
+                saveToJSON(fname);
+
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        if (ImGui::Button("Load Shapes")) {
+            // Abrir cuadro de diálogo para seleccionar archivo
+            ImGui::OpenPopup("Load Shapes");
+        }
+
+        if (ImGui::BeginPopup("Load Shapes")) {
+            static char filename[128] = "shapes.json";
+
+            // Campo de texto para el nombre del archivo
+            ImGui::InputText("Filename", filename, IM_ARRAYSIZE(filename));
+
+            ImGui::TextDisabled("Only JSON format is supported.");
+
+            // Botón para confirmar carga
+            if (ImGui::Button("Load")) {
+                std::string fname = filename;
+                std::transform(fname.begin(), fname.end(), fname.begin(), ::tolower);
+                if (fname.find_last_of(".") == std::string::npos) {
+                    // Si no tiene extensión, agregar .json por defecto
+                    fname += ".json";
+                }
+
+                // Cargar en formato JSON
+                loadFromJSON(fname);
+
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        // End Control Panel and restore style var pushed earlier
         ImGui::End();
         ImGui::PopStyleVar();
-
+        
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -1538,7 +1317,246 @@ public:
             lastTime = currentTime;
         }
     }
+
+    // Nueva función: guardar en archivo JSON
+    void saveToJSON(const std::string& filename) {
+        std::ofstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << "Failed to open file for saving: " << filename << std::endl;
+            return;
+        }
+
+        file << "{\n";
+        file << "  \"shapes\": [\n";
+
+        for (size_t i = 0; i < m_shapes.size(); ++i) {
+            const auto& shape = m_shapes[i];
+            file << "    {\n";
+            file << "      \"type\": ";
+
+            if (dynamic_cast<Line*>(shape.get())) {
+                file << "\"Line\"";
+            }
+            else if (dynamic_cast<Ellipse*>(shape.get())) {
+                file << "\"Ellipse\"";
+            }
+            else if (dynamic_cast<Rectangle*>(shape.get())) {
+                file << "\"Rectangle\"";
+            }
+            else if (dynamic_cast<Triangle*>(shape.get())) {
+                file << "\"Triangle\"";
+            }
+            else if (dynamic_cast<BezierCurve*>(shape.get())) {
+                file << "\"BezierCurve\"";
+            }
+
+            file << ",\n";
+            file << "      \"borderColor\": [" << (int)shape->borderColor.r << ", " << (int)shape->borderColor.g << ", " << (int)shape->borderColor.b << ", " << (int)shape->borderColor.a << "],\n";
+            file << "      \"fillColor\": [" << (int)shape->fillColor.r << ", " << (int)shape->fillColor.g << ", " << (int)shape->fillColor.b << ", " << (int)shape->fillColor.a << "],\n";
+            file << "      \"thickness\": " << shape->thickness << ",\n";
+            file << "      \"filled\": " << (shape->filled ? "true" : "false") << ",\n";
+
+            // Guardar puntos de control
+            file << "      \"controlPoints\": [\n";
+            auto pts = shape->getControlPoints();
+            for (size_t j = 0; j < pts.size(); ++j) {
+                file << "        [" << pts[j].first << ", " << pts[j].second << "]";
+                if (j < pts.size() - 1) file << ",";
+                file << "\n";
+            }
+            file << "      ]\n";
+
+            file << "    }";
+            if (i < m_shapes.size() - 1) file << ",";
+            file << "\n";
+        }
+
+        file << "  ]\n";
+        file << "}\n";
+
+        file.close();
+        std::cout << "Shapes saved to " << filename << std::endl;
+    }
+
+    // JSON load implementation
+    void loadFromJSON(const std::string& filename) {
+        std::ifstream file(filename);
+        if (!file.is_open()) { std::cerr << "Failed to open file for loading: " << filename << std::endl; return; }
+        std::stringstream ss; ss << file.rdbuf();
+        std::string s = ss.str();
+        m_shapes.clear();
+        m_selectedShape = nullptr;
+        m_selectedHandleIndex = -1;
+        m_isDraggingHandle = false;
+        m_triClicks = 0;
+        size_t pos = 0;
+        // find shapes array
+        pos = s.find("\"shapes\"");
+        if (pos == std::string::npos) { std::cout << "No shapes array in JSON\n"; return; }
+        pos = s.find('[', pos);
+        if (pos == std::string::npos) { std::cout << "Malformed JSON: no '[' after shapes\n"; return; }
+        ++pos;
+        while (pos < s.size()) {
+            // find next object start '{'
+            size_t objStart = s.find('{', pos);
+            if (objStart == std::string::npos) break;
+            // find matching closing '}' by counting braces
+            int depth = 0;
+            size_t i = objStart;
+            bool foundEnd = false;
+            for (; i < s.size(); ++i) {
+                if (s[i] == '{') depth++;
+                else if (s[i] == '}') {
+                    depth--;
+                    if (depth == 0) { foundEnd = true; break; }
+                }
+            }
+            if (!foundEnd) break;
+            size_t objEnd = i;
+            std::string obj = s.substr(objStart, objEnd - objStart + 1);
+
+            // parse type
+            std::string type = parseQuotedString(obj, "\"type\"", 0);
+
+            // parse borderColor and fillColor (arrays)
+            size_t tempPos = 0;
+            std::vector<int> border = parseIntArray(obj, obj.find("\"borderColor\""), tempPos);
+            std::vector<int> fill = parseIntArray(obj, obj.find("\"fillColor\""), tempPos);
+
+            // thickness (robust int parsing)
+            int thickness = 1;
+            size_t thPos = obj.find("\"thickness\"");
+            if (thPos != std::string::npos) {
+                size_t colon = obj.find(':', thPos);
+                if (colon != std::string::npos) {
+                    size_t start = colon + 1;
+                    while (start < obj.size() && isspace((unsigned char)obj[start])) ++start;
+                    size_t end = start;
+                    if (end < obj.size() && (obj[end] == '+' || obj[end] == '-')) ++end;
+                    while (end < obj.size() && isdigit((unsigned char)obj[end])) ++end;
+                    if (end > start) {
+                        thickness = std::stoi(obj.substr(start, end - start));
+                    }
+                }
+            }
+
+            // filled (bool)
+            bool filled = false;
+            size_t fPos = obj.find("\"filled\"");
+            if (fPos != std::string::npos) {
+                size_t colon = obj.find(':', fPos);
+                if (colon != std::string::npos) {
+                    size_t start = colon + 1;
+                    while (start < obj.size() && isspace((unsigned char)obj[start])) ++start;
+                    if (obj.compare(start, 4, "true") == 0) filled = true;
+                }
+            }
+
+            // controlPoints (flat ints -> pairs)
+            std::vector<int> flatPts = parseIntArray(obj, obj.find("\"controlPoints\""), tempPos);
+            std::vector<std::pair<int,int>> pts;
+            for (size_t k = 0; k + 1 < flatPts.size(); k += 2) pts.push_back({ flatPts[k], flatPts[k+1] });
+
+            // create shape
+            std::unique_ptr<Shape> shape;
+            if (type == "Line") {
+                auto p = std::make_unique<Line>();
+                if (pts.size()>=2) { p->x0 = pts[0].first; p->y0 = pts[0].second; p->x1 = pts[1].first; p->y1 = pts[1].second; }
+                shape = std::move(p);
+            } else if (type == "Ellipse") {
+                auto p = std::make_unique<Ellipse>();
+                if (pts.size()>=4) { int xmin=pts[0].first, xmax=pts[0].first, ymin=pts[0].second, ymax=pts[0].second; for(auto &pp:pts){ xmin=std::min(xmin,pp.first); xmax=std::max(xmax,pp.first); ymin=std::min(ymin,pp.second); ymax=std::max(ymax,pp.second);} p->cx=(xmin+xmax)/2; p->cy=(ymin+ymax)/2; p->a=std::max(1,(xmax-xmin)/2); p->b=std::max(1,(ymax-ymin)/2); }
+                shape = std::move(p);
+            } else if (type == "Rectangle") {
+                auto p = std::make_unique<Rectangle>();
+                if (pts.size()>=4) { int xmin=pts[0].first, xmax=pts[0].first, ymin=pts[0].second, ymax=pts[0].second; for(auto &pp:pts){ xmin=std::min(xmin,pp.first); xmax=std::max(xmax,pp.first); ymin=std::min(ymin,pp.second); ymax=std::max(ymax,pp.second);} p->xmin=xmin; p->xmax=xmax; p->ymin=ymin; p->ymax=ymax; }
+                shape = std::move(p);
+            } else if (type == "Triangle") {
+                auto p = std::make_unique<Triangle>();
+                if (pts.size()>=3) { p->x0=pts[0].first; p->y0=pts[0].second; p->x1=pts[1].first; p->y1=pts[1].second; p->x2=pts[2].first; p->y2=pts[2].second; }
+                shape = std::move(p);
+            } else if (type == "BezierCurve") {
+                auto p = std::make_unique<BezierCurve>();
+                p->controlPoints = pts;
+                shape = std::move(p);
+            }
+            if (shape) {
+                if (border.size() >= 4) { shape->borderColor = { (unsigned char)border[0], (unsigned char)border[1], (unsigned char)border[2], (unsigned char)border[3] }; }
+                else { shape->borderColor = m_borderColor; }
+                if (fill.size() >= 4) { shape->fillColor = { (unsigned char)fill[0], (unsigned char)fill[1], (unsigned char)fill[2], (unsigned char)fill[3] }; }
+                else { shape->fillColor = m_fillColor; }
+                shape->thickness = thickness;
+                shape->filled = filled;
+                // Ensure reasonable coordinates (clamp to canvas)
+                auto clampPoint = [&](int &x, int &y){ x = std::max(0, std::min(x, width-1)); y = std::max(0, std::min(y, height-1)); };
+                auto ptsForClamp = shape->getControlPoints();
+                for (size_t cp = 0; cp < ptsForClamp.size(); ++cp) {
+                    int cx = ptsForClamp[cp].first, cy = ptsForClamp[cp].second;
+                    clampPoint(cx, cy);
+                    shape->setControlPoint((int)cp, cx, cy);
+                }
+
+                m_shapes.push_back(std::move(shape));
+            }
+            pos = objEnd + 1;
+        }
+
+        std::cout << "Shapes loaded from " << filename << ": count=" << m_shapes.size() << std::endl;
+        for (size_t si=0; si<m_shapes.size(); ++si) {
+            Shape* s = m_shapes[si].get();
+            std::string t = "Unknown";
+            if (dynamic_cast<Line*>(s)) t = "Line";
+            else if (dynamic_cast<Ellipse*>(s)) t = "Ellipse";
+            else if (dynamic_cast<Rectangle*>(s)) t = "Rectangle";
+            else if (dynamic_cast<Triangle*>(s)) t = "Triangle";
+            else if (dynamic_cast<BezierCurve*>(s)) t = "BezierCurve";
+            auto cps = s->getControlPoints();
+            std::cout << "  [" << si << "] type=" << t << " cps=" << cps.size() << " border=(" << (int)s->borderColor.r << "," << (int)s->borderColor.g << "," << (int)s->borderColor.b << "," << (int)s->borderColor.a << ") fill=(" << (int)s->fillColor.r << "," << (int)s->fillColor.g << "," << (int)s->fillColor.b << "," << (int)s->fillColor.a << ") thickness=" << s->thickness << " filled=" << s->filled << std::endl;
+        }
+    }
+
+    // Helper: parse integer array [a, b, c] starting at pos of '['
+    static std::vector<int> parseIntArray(const std::string& s, size_t startPos, size_t& outPos) {
+        std::vector<int> res;
+        size_t p = s.find('[', startPos);
+        if (p == std::string::npos) { outPos = startPos; return res; }
+        ++p; // after [
+        while (p < s.size()) {
+            // skip whitespace
+            while (p < s.size() && isspace((unsigned char)s[p])) ++p;
+            if (p >= s.size()) break;
+            if (s[p] == ']') { ++p; break; }
+            // read number (could be negative)
+            bool neg = false;
+            if (s[p] == '-') { neg = true; ++p; }
+            long long val = 0;
+            bool haveDigit = false;
+            while (p < s.size() && isdigit((unsigned char)s[p])) { haveDigit = true; val = val * 10 + (s[p] - '0'); ++p; }
+            if (haveDigit) {
+                if (neg) val = -val;
+                res.push_back((int)val);
+            }
+            // skip to next comma or ]
+            while (p < s.size() && s[p] != ',' && s[p] != ']') ++p;
+            if (p < s.size() && s[p] == ',') ++p;
+        }
+        outPos = p;
+        return res;
+    }
+
+    // Helper: find quoted string after a key name
+    static std::string parseQuotedString(const std::string& s, const std::string& key, size_t startPos) {
+        size_t k = s.find(key, startPos);
+        if (k == std::string::npos) return "";
+        size_t q = s.find('"', k + key.size());
+        if (q == std::string::npos) return "";
+        size_t q2 = s.find('"', q + 1);
+        if (q2 == std::string::npos) return "";
+        return s.substr(q + 1, q2 - (q + 1));
+    }
+
 };
+
 
 int main() {
     CMyTest test;
