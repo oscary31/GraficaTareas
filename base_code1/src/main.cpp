@@ -783,7 +783,7 @@ public:
 
     BezierCurve* findBezierCurveNear(int x, int y, int& controlPointIndex) {
         controlPointIndex = -1;
-        const int TOLERANCE = 15;
+        const int TOLERANCE = 20;
 
         for (auto it = m_shapes.rbegin(); it != m_shapes.rend(); ++it) {
             BezierCurve* bezier = dynamic_cast<BezierCurve*>(it->get());
@@ -1638,6 +1638,14 @@ public:
         }
 
         file << "{\n";
+
+        // Guardar color de fondo
+        file << "  \"backgroundColor\": ["
+            << (int)m_bgColor.r << ", "
+            << (int)m_bgColor.g << ", "
+            << (int)m_bgColor.b << ", "
+            << (int)m_bgColor.a << "],\n";
+
         file << "  \"shapes\": [\n";
 
         for (size_t i = 0; i < m_shapes.size(); ++i) {
@@ -1689,155 +1697,491 @@ public:
         std::cout << "Shapes saved to " << filename << std::endl;
     }
 
-    // JSON load implementation
     void loadFromJSON(const std::string& filename) {
         std::ifstream file(filename);
-        if (!file.is_open()) { std::cerr << "Failed to open file for loading: " << filename << std::endl; return; }
-        std::stringstream ss; ss << file.rdbuf();
-        std::string s = ss.str();
+        if (!file.is_open()) {
+            std::cerr << "ERROR: No se pudo abrir: " << filename << std::endl;
+            return;
+        }
+
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string content = buffer.str();
+        file.close();
+
+        std::cout << "\n=======================================" << std::endl;
+        std::cout << "CARGANDO: " << filename << std::endl;
+        std::cout << "=======================================" << std::endl;
+
+        // Limpiar estado
         m_shapes.clear();
-        size_t pos = 0;
-        // find shapes array
-        pos = s.find("\"shapes\"");
-        if (pos == std::string::npos) return;
-        pos = s.find('[', pos);
-        if (pos == std::string::npos) return;
-        ++pos;
-        while (pos < s.size()) {
-            // find next object start '{'
-            size_t objStart = s.find('{', pos);
-            if (objStart == std::string::npos) break;
-            // find matching closing '}' by counting braces
-            int depth = 0;
-            size_t i = objStart;
-            bool foundEnd = false;
-            for (; i < s.size(); ++i) {
-                if (s[i] == '{') depth++;
-                else if (s[i] == '}') {
-                    depth--;
-                    if (depth == 0) { foundEnd = true; break; }
-                }
+        m_selectedShape = nullptr;
+        m_selectedHandleIndex = -1;
+        m_triClicks = 0;
+        m_tempControlPoints.clear();
+        m_editingCurve = nullptr;
+        m_selectedControlPoint = -1;
+        m_isDraggingHandle = false;
+        m_isDraggingControlPoint = false;
+        m_x0 = -1; m_y0 = -1; m_x1 = -1; m_y1 = -1;
+
+        // Cargar color de fondo si existe
+        size_t bgColorPos = content.find("\"backgroundColor\"");
+        if (bgColorPos != std::string::npos) {
+            std::vector<int> bgVec = parseNestedIntArray(content, bgColorPos);
+            if (bgVec.size() >= 4) {
+                m_bgColor.r = (unsigned char)bgVec[0];
+                m_bgColor.g = (unsigned char)bgVec[1];
+                m_bgColor.b = (unsigned char)bgVec[2];
+                m_bgColor.a = (unsigned char)bgVec[3];
+
+                // Actualizar también el array float para ImGui
+                m_bgColorArray[0] = bgVec[0] / 255.0f;
+                m_bgColorArray[1] = bgVec[1] / 255.0f;
+                m_bgColorArray[2] = bgVec[2] / 255.0f;
+                m_bgColorArray[3] = bgVec[3] / 255.0f;
+
+                std::cout << "Color de fondo cargado: (" << bgVec[0] << "," << bgVec[1] << "," << bgVec[2] << "," << bgVec[3] << ")" << std::endl;
             }
-            if (!foundEnd) break;
-            size_t objEnd = i;
-            std::string obj = s.substr(objStart, objEnd - objStart + 1);
+        }
 
-            // parse type
-            std::string type = parseQuotedString(obj, "\"type\"", 0);
 
-            // parse borderColor and fillColor (arrays)
-            size_t tempPos = 0;
-            std::vector<int> border = parseIntArray(obj, obj.find("\"borderColor\""), tempPos);
-            std::vector<int> fill = parseIntArray(obj, obj.find("\"fillColor\""), tempPos);
+        // Buscar array de shapes
+        size_t shapesPos = content.find("\"shapes\"");
+        if (shapesPos == std::string::npos) {
+            std::cerr << "ERROR: No se encontro 'shapes'" << std::endl;
+            return;
+        }
 
-            // thickness (robust int parsing)
-            int thickness = 1;
-            size_t thPos = obj.find("\"thickness\"");
-            if (thPos != std::string::npos) {
-                size_t colon = obj.find(':', thPos);
-                if (colon != std::string::npos) {
-                    size_t start = colon + 1;
-                    while (start < obj.size() && isspace((unsigned char)obj[start])) ++start;
-                    size_t end = start;
-                    if (end < obj.size() && (obj[end] == '+' || obj[end] == '-')) ++end;
-                    while (end < obj.size() && isdigit((unsigned char)obj[end])) ++end;
-                    if (end > start) {
-                        thickness = std::stoi(obj.substr(start, end - start));
+        size_t arrayStart = content.find('[', shapesPos);
+        if (arrayStart == std::string::npos) {
+            std::cerr << "ERROR: No se encontro array" << std::endl;
+            return;
+        }
+
+        size_t pos = arrayStart + 1;
+        int shapesLoaded = 0;
+
+        // Procesar cada objeto
+        while (pos < content.size()) {
+            size_t objStart = content.find('{', pos);
+            if (objStart == std::string::npos) break;
+
+            // Encontrar cierre del objeto
+            int braceDepth = 0;
+            size_t i = objStart;
+            size_t objEnd = std::string::npos;
+
+            for (; i < content.size(); ++i) {
+                if (content[i] == '{') braceDepth++;
+                else if (content[i] == '}') {
+                    braceDepth--;
+                    if (braceDepth == 0) {
+                        objEnd = i;
+                        break;
                     }
                 }
             }
 
-            // filled (bool)
-            bool filled = false;
-            size_t fPos = obj.find("\"filled\"");
-            if (fPos != std::string::npos) {
-                size_t colon = obj.find(':', fPos);
+            if (objEnd == std::string::npos) break;
+
+            std::string shapeObj = content.substr(objStart, objEnd - objStart + 1);
+
+            // Parsear tipo
+            std::string type = parseQuotedString(shapeObj, "\"type\"", 0);
+            if (type.empty()) {
+                pos = objEnd + 1;
+                continue;
+            }
+
+            std::cout << "\nFigura #" << (shapesLoaded + 1) << ": " << type << std::endl;
+
+            // Parsear colores (también son arrays anidados)
+            std::vector<int> borderVec = parseNestedIntArray(shapeObj, shapeObj.find("\"borderColor\""));
+            std::vector<int> fillVec = parseNestedIntArray(shapeObj, shapeObj.find("\"fillColor\""));
+
+            // Parsear thickness
+            int thickness = 1;
+            size_t thPos = shapeObj.find("\"thickness\"");
+            if (thPos != std::string::npos) {
+                size_t colon = shapeObj.find(':', thPos);
                 if (colon != std::string::npos) {
                     size_t start = colon + 1;
-                    while (start < obj.size() && isspace((unsigned char)obj[start])) ++start;
-                    if (obj.compare(start, 4, "true") == 0) filled = true;
+                    while (start < shapeObj.size() && isspace((unsigned char)shapeObj[start])) ++start;
+                    size_t end = start;
+                    if (end < shapeObj.size() && (shapeObj[end] == '+' || shapeObj[end] == '-')) ++end;
+                    while (end < shapeObj.size() && isdigit((unsigned char)shapeObj[end])) ++end;
+                    if (end > start) {
+                        thickness = std::stoi(shapeObj.substr(start, end - start));
+                    }
                 }
             }
 
-            // controlPoints (flat ints -> pairs)
-            std::vector<int> flatPts = parseIntArray(obj, obj.find("\"controlPoints\""), tempPos);
-            std::vector<std::pair<int,int>> pts;
-            for (size_t k = 0; k + 1 < flatPts.size(); k += 2) pts.push_back({ flatPts[k], flatPts[k+1] });
-
-            // create shape
-            std::unique_ptr<Shape> shape;
-            if (type == "Line") {
-                auto p = std::make_unique<Line>();
-                if (pts.size()>=2) { p->x0 = pts[0].first; p->y0 = pts[0].second; p->x1 = pts[1].first; p->y1 = pts[1].second; }
-                shape = std::move(p);
-            } else if (type == "Ellipse") {
-                auto p = std::make_unique<Ellipse>();
-                if (pts.size()>=4) { int xmin=pts[0].first, xmax=pts[0].first, ymin=pts[0].second, ymax=pts[0].second; for(auto &pp:pts){ xmin=std::min(xmin,pp.first); xmax=std::max(xmax,pp.first); ymin=std::min(ymin,pp.second); ymax=std::max(ymax,pp.second);} p->cx=(xmin+xmax)/2; p->cy=(ymin+ymax)/2; p->a=std::max(1,(xmax-xmin)/2); p->b=std::max(1,(ymax-ymin)/2); }
-                shape = std::move(p);
-            } else if (type == "Rectangle") {
-                auto p = std::make_unique<Rectangle>();
-                if (pts.size()>=4) { int xmin=pts[0].first, xmax=pts[0].first, ymin=pts[0].second, ymax=pts[0].second; for(auto &pp:pts){ xmin=std::min(xmin,pp.first); xmax=std::max(xmax,pp.first); ymin=std::min(ymin,pp.second); ymax=std::max(ymax,pp.second);} p->xmin=xmin; p->xmax=xmax; p->ymin=ymin; p->ymax=ymax; }
-                shape = std::move(p);
-            } else if (type == "Triangle") {
-                auto p = std::make_unique<Triangle>();
-                if (pts.size()>=3) { p->x0=pts[0].first; p->y0=pts[0].second; p->x1=pts[1].first; p->y1=pts[1].second; p->x2=pts[2].first; p->y2=pts[2].second; }
-                shape = std::move(p);
-            } else if (type == "BezierCurve") {
-                auto p = std::make_unique<BezierCurve>();
-                p->controlPoints = pts;
-                shape = std::move(p);
+            // Parsear filled
+            bool filled = false;
+            size_t fPos = shapeObj.find("\"filled\"");
+            if (fPos != std::string::npos) {
+                size_t colon = shapeObj.find(':', fPos);
+                if (colon != std::string::npos) {
+                    size_t start = colon + 1;
+                    while (start < shapeObj.size() && isspace((unsigned char)shapeObj[start])) ++start;
+                    if (shapeObj.compare(start, 4, "true") == 0) filled = true;
+                }
             }
+
+            // Parsear control points
+            std::vector<int> flatPts = parseNestedIntArray(shapeObj, shapeObj.find("\"controlPoints\""));
+            std::vector<std::pair<int, int>> controlPoints;
+
+            for (size_t k = 0; k + 1 < flatPts.size(); k += 2) {
+                controlPoints.push_back({ flatPts[k], flatPts[k + 1] });
+            }
+
+            // Crear figura
+            std::unique_ptr<Shape> shape;
+
+            if (type == "Line" && controlPoints.size() >= 2) {
+                auto line = std::make_unique<Line>();
+                line->x0 = controlPoints[0].first;
+                line->y0 = controlPoints[0].second;
+                line->x1 = controlPoints[1].first;
+                line->y1 = controlPoints[1].second;
+
+                if (borderVec.size() >= 4) {
+                    line->borderColor = { (unsigned char)borderVec[0], (unsigned char)borderVec[1],
+                                         (unsigned char)borderVec[2], (unsigned char)borderVec[3] };
+                }
+                if (fillVec.size() >= 4) {
+                    line->fillColor = { (unsigned char)fillVec[0], (unsigned char)fillVec[1],
+                                       (unsigned char)fillVec[2], (unsigned char)fillVec[3] };
+                }
+                line->thickness = thickness;
+                line->filled = filled;
+                shape = std::move(line);
+            }
+            else if (type == "Ellipse" && controlPoints.size() >= 1) {
+                auto ellipse = std::make_unique<Ellipse>();
+
+                if (controlPoints.size() >= 4) {
+                    int xmin = controlPoints[0].first, xmax = controlPoints[0].first;
+                    int ymin = controlPoints[0].second, ymax = controlPoints[0].second;
+
+                    for (const auto& p : controlPoints) {
+                        xmin = std::min(xmin, p.first);
+                        xmax = std::max(xmax, p.first);
+                        ymin = std::min(ymin, p.second);
+                        ymax = std::max(ymax, p.second);
+                    }
+
+                    ellipse->cx = (xmin + xmax) / 2;
+                    ellipse->cy = (ymin + ymax) / 2;
+                    ellipse->a = std::max(1, (xmax - xmin) / 2);
+                    ellipse->b = std::max(1, (ymax - ymin) / 2);
+                }
+                else {
+                    // Elipse degenerada (punto único)
+                    ellipse->cx = controlPoints[0].first;
+                    ellipse->cy = controlPoints[0].second;
+                    ellipse->a = 1;
+                    ellipse->b = 1;
+                }
+
+                if (borderVec.size() >= 4) {
+                    ellipse->borderColor = { (unsigned char)borderVec[0], (unsigned char)borderVec[1],
+                                            (unsigned char)borderVec[2], (unsigned char)borderVec[3] };
+                }
+                if (fillVec.size() >= 4) {
+                    ellipse->fillColor = { (unsigned char)fillVec[0], (unsigned char)fillVec[1],
+                                          (unsigned char)fillVec[2], (unsigned char)fillVec[3] };
+                }
+                ellipse->thickness = thickness;
+                ellipse->filled = filled;
+                shape = std::move(ellipse);
+            }
+            else if (type == "Rectangle" && controlPoints.size() >= 4) {
+                auto rect = std::make_unique<Rectangle>();
+                int xmin = controlPoints[0].first, xmax = controlPoints[0].first;
+                int ymin = controlPoints[0].second, ymax = controlPoints[0].second;
+
+                for (const auto& p : controlPoints) {
+                    xmin = std::min(xmin, p.first);
+                    xmax = std::max(xmax, p.first);
+                    ymin = std::min(ymin, p.second);
+                    ymax = std::max(ymax, p.second);
+                }
+
+                rect->xmin = xmin; rect->xmax = xmax;
+                rect->ymin = ymin; rect->ymax = ymax;
+
+                if (borderVec.size() >= 4) {
+                    rect->borderColor = { (unsigned char)borderVec[0], (unsigned char)borderVec[1],
+                                         (unsigned char)borderVec[2], (unsigned char)borderVec[3] };
+                }
+                if (fillVec.size() >= 4) {
+                    rect->fillColor = { (unsigned char)fillVec[0], (unsigned char)fillVec[1],
+                                       (unsigned char)fillVec[2], (unsigned char)fillVec[3] };
+                }
+                rect->thickness = thickness;
+                rect->filled = filled;
+                shape = std::move(rect);
+            }
+            else if (type == "Triangle" && controlPoints.size() >= 3) {
+                auto triangle = std::make_unique<Triangle>();
+                triangle->x0 = controlPoints[0].first; triangle->y0 = controlPoints[0].second;
+                triangle->x1 = controlPoints[1].first; triangle->y1 = controlPoints[1].second;
+                triangle->x2 = controlPoints[2].first; triangle->y2 = controlPoints[2].second;
+
+                if (borderVec.size() >= 4) {
+                    triangle->borderColor = { (unsigned char)borderVec[0], (unsigned char)borderVec[1],
+                                             (unsigned char)borderVec[2], (unsigned char)borderVec[3] };
+                }
+                if (fillVec.size() >= 4) {
+                    triangle->fillColor = { (unsigned char)fillVec[0], (unsigned char)fillVec[1],
+                                           (unsigned char)fillVec[2], (unsigned char)fillVec[3] };
+                }
+                triangle->thickness = thickness;
+                triangle->filled = filled;
+                shape = std::move(triangle);
+            }
+            else if (type == "BezierCurve" && controlPoints.size() >= 2) {
+                auto bezier = std::make_unique<BezierCurve>();
+                bezier->controlPoints = controlPoints;
+
+                if (borderVec.size() >= 4) {
+                    bezier->borderColor = { (unsigned char)borderVec[0], (unsigned char)borderVec[1],
+                                           (unsigned char)borderVec[2], (unsigned char)borderVec[3] };
+                }
+                if (fillVec.size() >= 4) {
+                    bezier->fillColor = { (unsigned char)fillVec[0], (unsigned char)fillVec[1],
+                                         (unsigned char)fillVec[2], (unsigned char)fillVec[3] };
+                }
+                bezier->thickness = thickness;
+                bezier->filled = filled;
+                shape = std::move(bezier);
+            }
+
             if (shape) {
-                if (border.size() >= 4) { shape->borderColor = { (unsigned char)border[0], (unsigned char)border[1], (unsigned char)border[2], (unsigned char)border[3] }; }
-                if (fill.size() >= 4) { shape->fillColor = { (unsigned char)fill[0], (unsigned char)fill[1], (unsigned char)fill[2], (unsigned char)fill[3] }; }
-                shape->thickness = thickness;
-                shape->filled = filled;
                 m_shapes.push_back(std::move(shape));
+                shapesLoaded++;
+            }
+            else {
+                std::cout << " No existe la figura o tiene insuficientes puntos" << std::endl;
             }
 
             pos = objEnd + 1;
         }
-        std::cout << "Shapes loaded from " << filename << std::endl;
+
+        std::cout << "\n=======================================" << std::endl;
+        std::cout << shapesLoaded << " figuras cargadas con exito" << std::endl;
+        std::cout << "=======================================\n" << std::endl;
     }
 
-    // Helper: parse integer array [a, b, c] starting at pos of '['
-    static std::vector<int> parseIntArray(const std::string& s, size_t startPos, size_t& outPos) {
-        std::vector<int> res;
-        size_t p = s.find('[', startPos);
-        if (p == std::string::npos) { outPos = startPos; return res; }
-        ++p; // after [
-        while (p < s.size()) {
-            // skip whitespace
-            while (p < s.size() && isspace((unsigned char)s[p])) ++p;
-            if (p >= s.size()) break;
-            if (s[p] == ']') { ++p; break; }
-            // read number (could be negative)
-            bool neg = false;
-            if (s[p] == '-') { neg = true; ++p; }
-            long long val = 0;
-            bool haveDigit = false;
-            while (p < s.size() && isdigit((unsigned char)s[p])) { haveDigit = true; val = val * 10 + (s[p] - '0'); ++p; }
-            if (haveDigit) {
-                if (neg) val = -val;
-                res.push_back((int)val);
-            }
-            // skip to next comma or ]
-            while (p < s.size() && s[p] != ',' && s[p] != ']') ++p;
-            if (p < s.size() && s[p] == ',') ++p;
+
+    // Funciones auxiliares para parsear el JSON
+    // Parsear un valor entero
+    static int parseIntValue(const std::string& s, const std::string& key, int defaultValue) {
+        size_t keyPos = s.find(key);
+        if (keyPos == std::string::npos) return defaultValue;
+
+        size_t colonPos = s.find(':', keyPos);
+        if (colonPos == std::string::npos) return defaultValue;
+
+        size_t numStart = colonPos + 1;
+        while (numStart < s.size() && isspace((unsigned char)s[numStart])) ++numStart;
+
+        if (numStart >= s.size()) return defaultValue;
+
+        // Manejar signo negativo
+        bool negative = false;
+        if (s[numStart] == '-') {
+            negative = true;
+            ++numStart;
         }
-        outPos = p;
-        return res;
+        else if (s[numStart] == '+') {
+            ++numStart;
+        }
+
+        // Extraer dígitos
+        size_t numEnd = numStart;
+        while (numEnd < s.size() && isdigit((unsigned char)s[numEnd])) ++numEnd;
+
+        if (numEnd > numStart) {
+            int value = std::stoi(s.substr(numStart, numEnd - numStart));
+            return negative ? -value : value;
+        }
+
+        return defaultValue;
     }
 
-    // Helper: find quoted string after a key name
+    // Parsear un valor booleano
+    static bool parseBoolValue(const std::string& s, const std::string& key, bool defaultValue) {
+        size_t keyPos = s.find(key);
+        if (keyPos == std::string::npos) return defaultValue;
+
+        size_t colonPos = s.find(':', keyPos);
+        if (colonPos == std::string::npos) return defaultValue;
+
+        size_t valueStart = colonPos + 1;
+        while (valueStart < s.size() && isspace((unsigned char)s[valueStart])) ++valueStart;
+
+        if (s.compare(valueStart, 4, "true") == 0) return true;
+        if (s.compare(valueStart, 5, "false") == 0) return false;
+
+        return defaultValue;
+    }
+
+    // Crear figura según el tipo
+    std::unique_ptr<Shape> createShapeFromType(const std::string& type,
+        const std::vector<std::pair<int, int>>& points) {
+        if (type == "Line") {
+            auto line = std::make_unique<Line>();
+            if (points.size() >= 2) {
+                line->x0 = points[0].first;
+                line->y0 = points[0].second;
+                line->x1 = points[1].first;
+                line->y1 = points[1].second;
+            }
+            return line;
+        }
+        else if (type == "Ellipse") {
+            auto ellipse = std::make_unique<Ellipse>();
+            if (points.size() >= 4) {
+                // Calcular bounding box desde los 4 puntos
+                int xmin = points[0].first, xmax = points[0].first;
+                int ymin = points[0].second, ymax = points[0].second;
+
+                for (const auto& p : points) {
+                    xmin = std::min(xmin, p.first);
+                    xmax = std::max(xmax, p.first);
+                    ymin = std::min(ymin, p.second);
+                    ymax = std::max(ymax, p.second);
+                }
+
+                ellipse->cx = (xmin + xmax) / 2;
+                ellipse->cy = (ymin + ymax) / 2;
+                ellipse->a = std::max(1, (xmax - xmin) / 2);
+                ellipse->b = std::max(1, (ymax - ymin) / 2);
+            }
+            return ellipse;
+        }
+        else if (type == "Rectangle") {
+            auto rect = std::make_unique<Rectangle>();
+            if (points.size() >= 4) {
+                int xmin = points[0].first, xmax = points[0].first;
+                int ymin = points[0].second, ymax = points[0].second;
+
+                for (const auto& p : points) {
+                    xmin = std::min(xmin, p.first);
+                    xmax = std::max(xmax, p.first);
+                    ymin = std::min(ymin, p.second);
+                    ymax = std::max(ymax, p.second);
+                }
+
+                rect->xmin = xmin;
+                rect->xmax = xmax;
+                rect->ymin = ymin;
+                rect->ymax = ymax;
+            }
+            return rect;
+        }
+        else if (type == "Triangle") {
+            auto triangle = std::make_unique<Triangle>();
+            if (points.size() >= 3) {
+                triangle->x0 = points[0].first;
+                triangle->y0 = points[0].second;
+                triangle->x1 = points[1].first;
+                triangle->y1 = points[1].second;
+                triangle->x2 = points[2].first;
+                triangle->y2 = points[2].second;
+            }
+            return triangle;
+        }
+        else if (type == "BezierCurve") {
+            auto bezier = std::make_unique<BezierCurve>();
+            bezier->controlPoints = points;
+            return bezier;
+        }
+
+        return nullptr;
+    }
+
+    // Parsea arrays anidados como [[x1,y1], [x2,y2]]
+    static std::vector<int> parseNestedIntArray(const std::string& s, size_t startPos) {
+        std::vector<int> result;
+
+        if (startPos == std::string::npos) {
+            return result;
+        }
+
+        // Buscar el primer '['
+        size_t arrayStart = s.find('[', startPos);
+        if (arrayStart == std::string::npos) {
+            return result;
+        }
+
+        size_t pos = arrayStart + 1;
+
+        // Extraer todos los números (ignorando estructura de arrays)
+        while (pos < s.size()) {
+            // Saltar espacios, tabs, newlines, corchetes y comas
+            while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t' || s[pos] == '\n' ||
+                s[pos] == '\r' || s[pos] == '[' || s[pos] == ',')) {
+                ++pos;
+            }
+
+            if (pos >= s.size()) break;
+
+            // Si encontramos ']', verificar si es el cierre final
+            if (s[pos] == ']') {
+                // Buscar si hay otro ']' seguido (cierre del array principal)
+                size_t next = pos + 1;
+                while (next < s.size() && (s[next] == ' ' || s[next] == '\t' || s[next] == '\n' || s[next] == '\r' || s[next] == ',')) {
+                    ++next;
+                }
+                if (next < s.size() && s[next] == ']') {
+                    // Es el cierre final
+                    break;
+                }
+                // Es solo cierre de sub-array, continuar
+                ++pos;
+                continue;
+            }
+
+            // Parsear número
+            bool negative = false;
+            if (s[pos] == '-') {
+                negative = true;
+                ++pos;
+            }
+
+            if (pos < s.size() && isdigit((unsigned char)s[pos])) {
+                int value = 0;
+                while (pos < s.size() && isdigit((unsigned char)s[pos])) {
+                    value = value * 10 + (s[pos] - '0');
+                    ++pos;
+                }
+                result.push_back(negative ? -value : value);
+            }
+            else {
+                ++pos; // Avanzar para evitar bucle infinito
+            }
+        }
+
+        return result;
+    }
+
+    // Parsear string entre comillas
     static std::string parseQuotedString(const std::string& s, const std::string& key, size_t startPos) {
-        size_t k = s.find(key, startPos);
-        if (k == std::string::npos) return "";
-        size_t q = s.find('"', k + key.size());
-        if (q == std::string::npos) return "";
-        size_t q2 = s.find('"', q + 1);
-        if (q2 == std::string::npos) return "";
-        return s.substr(q + 1, q2 - (q + 1));
+        size_t keyPos = s.find(key, startPos);
+        if (keyPos == std::string::npos) return "";
+
+        size_t firstQuote = s.find('"', keyPos + key.size());
+        if (firstQuote == std::string::npos) return "";
+
+        size_t secondQuote = s.find('"', firstQuote + 1);
+        if (secondQuote == std::string::npos) return "";
+
+        return s.substr(firstQuote + 1, secondQuote - firstQuote - 1);
     }
 
 };
