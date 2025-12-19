@@ -1429,6 +1429,18 @@ public:
                 m_selectedControlPointColor.b = static_cast<unsigned char>(selControlPointCol[2] * 255.0f);
                 m_selectedControlPointColor.a = static_cast<unsigned char>(selControlPointCol[3] * 255.0f);
             }
+            float controlPolygonCol[4] = {
+                m_controlPolygonColor.r / 255.0f,
+                m_controlPolygonColor.g / 255.0f,
+                m_controlPolygonColor.b / 255.0f,
+                m_controlPolygonColor.a / 255.0f
+            };
+            if (ImGui::ColorEdit4("Polygon Lines", controlPolygonCol)) {
+                m_controlPolygonColor.r = static_cast<unsigned char>(controlPolygonCol[0] * 255.0f);
+                m_controlPolygonColor.g = static_cast<unsigned char>(controlPolygonCol[1] * 255.0f);
+                m_controlPolygonColor.b = static_cast<unsigned char>(controlPolygonCol[2] * 255.0f);
+                m_controlPolygonColor.a = static_cast<unsigned char>(controlPolygonCol[3] * 255.0f);
+            }
         }
 
         // If selected shape is Bezier, show subdivision/elevation UI
