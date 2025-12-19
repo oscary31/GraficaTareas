@@ -1,5 +1,4 @@
-﻿
-#include "PixelRender.h"
+﻿#include "PixelRender.h"
 #include <iostream>
 #include <vector>
 #include <set>
@@ -29,8 +28,8 @@ private:
     // Colores para los puntos de control y selección
     RGBA m_controlPointColor = { 255, 119, 0, 255 };         // Naranja
     RGBA m_selectedControlPointColor = { 0, 119, 255, 255 }; // Azul
-	RGBA m_controlPolygonColor = { 136, 136, 136, 255 };     // Gris para las líneas del polígono de control
-	RGBA m_selectionHandleColor = m_controlPointColor;       // color del box de selección
+    RGBA m_controlPolygonColor = { 136, 136, 136, 255 };     // Gris para las líneas del polígono de control
+    RGBA m_selectionHandleColor = m_controlPointColor;       // color del box de selección
 
     // Colores de fondo
     float m_bgColorArray[4] = { 201.0f / 255.0f, 201.0f / 255.0f, 201.0f / 255.0f, 1.0f };
@@ -306,7 +305,7 @@ private:
 
         bool containsPoint(int x, int y) override
         {
-            
+
             auto sign = [](int px, int py, int ax, int ay, int bx, int by) -> float {
                 return (px - bx) * (ay - by) - (ax - bx) * (py - by);
                 };
@@ -1543,16 +1542,16 @@ public:
             if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(m_window, GLFW_TRUE);
 
             // ==== UNDO / REDO ====
-                if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL)) {
-                    if (mods & GLFW_MOD_SHIFT) {
-                        performRedo();
-                        std::cout << "Redo\n";
-                    }
-                    else {
-                        performUndo();
-                        std::cout << "Undo\n";
-                    }
+            if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL)) {
+                if (mods & GLFW_MOD_SHIFT) {
+                    performRedo();
+                    std::cout << "Redo\n";
                 }
+                else {
+                    performUndo();
+                    std::cout << "Undo\n";
+                }
+            }
 
             if (key == GLFW_KEY_Y && (mods & GLFW_MOD_CONTROL)) {
                 performRedo();
@@ -2004,7 +2003,7 @@ public:
 
             ImGui::InputText("Filename", filename, IM_ARRAYSIZE(filename));
 
-            const char* formats[] = { "JSON (Project file)", "PNG (Image)", "JPG (Image)"};
+            const char* formats[] = { "JSON (Project file)", "PNG (Image)", "JPG (Image)" };
             ImGui::Combo("Format", &saveFormat, formats, IM_ARRAYSIZE(formats));
 
             ImGui::Separator();
@@ -2173,7 +2172,7 @@ public:
             ImGui::Text("Control points: %d", (int)m_tempControlPoints.size());
         }
 
-		ImGui::Separator();
+        ImGui::Separator();
         ImGui::Checkbox("Use ImGui Primitives", &m_useImGuiPrimitives);
 
         ImGui::Separator();
@@ -2298,7 +2297,7 @@ public:
         }
 
         ImGui::Separator();
-     
+
         BezierCurve* bz = dynamic_cast<BezierCurve*>(m_selectedShape);
         if (bz) {
             ImGui::Separator();
