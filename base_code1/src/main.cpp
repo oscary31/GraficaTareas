@@ -6,6 +6,8 @@
 #include <memory>
 #include <imgui.h>
 #include <cmath>
+#include <fstream>
+#include <sstream>
 
 class CMyTest : public CPixelRender
 {
@@ -1535,9 +1537,85 @@ public:
             m_selectedHandleIndex = -1;
         }
 
+        // Botones para guardar y cargar
+        ImGui::Separator();
+        if (ImGui::Button("Save Shapes")) {
+            // Abrir cuadro de diálogo para seleccionar archivo y formato
+            ImGui::OpenPopup("Save Shapes");
+        }
+
+        if (ImGui::BeginPopup("Save Shapes")) {
+            static char filename[128] = "shapes.json";
+
+            // Campo de texto para el nombre del archivo
+            ImGui::InputText("Filename", filename, IM_ARRAYSIZE(filename));
+
+            // Only JSON supported now
+            ImGui::TextDisabled("Only JSON format is supported.");
+
+            // Botón para confirmar guardado
+            if (ImGui::Button("Save")) {
+                std::string fname = filename;
+                std::transform(fname.begin(), fname.end(), fname.begin(), ::tolower);
+                if (fname.find_last_of(".") == std::string::npos) {
+                    // Si no tiene extensión, agregar .json por defecto
+                    fname += ".json";
+                }
+
+                // Guardar en formato JSON
+                saveToJSON(fname);
+
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        if (ImGui::Button("Load Shapes")) {
+            // Abrir cuadro de diálogo para seleccionar archivo
+            ImGui::OpenPopup("Load Shapes");
+        }
+
+        if (ImGui::BeginPopup("Load Shapes")) {
+            static char filename[128] = "shapes.json";
+
+            // Campo de texto para el nombre del archivo
+            ImGui::InputText("Filename", filename, IM_ARRAYSIZE(filename));
+
+            ImGui::TextDisabled("Only JSON format is supported.");
+
+            // Botón para confirmar carga
+            if (ImGui::Button("Load")) {
+                std::string fname = filename;
+                std::transform(fname.begin(), fname.end(), fname.begin(), ::tolower);
+                if (fname.find_last_of(".") == std::string::npos) {
+                    // Si no tiene extensión, agregar .json por defecto
+                    fname += ".json";
+                }
+
+                // Cargar en formato JSON
+                loadFromJSON(fname);
+
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        // End Control Panel and restore style var pushed earlier
         ImGui::End();
         ImGui::PopStyleVar();
-
+        
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -1550,7 +1628,220 @@ public:
             lastTime = currentTime;
         }
     }
+
+    // Nueva función: guardar en archivo JSON
+    void saveToJSON(const std::string& filename) {
+        std::ofstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << "Failed to open file for saving: " << filename << std::endl;
+            return;
+        }
+
+        file << "{\n";
+        file << "  \"shapes\": [\n";
+
+        for (size_t i = 0; i < m_shapes.size(); ++i) {
+            const auto& shape = m_shapes[i];
+            file << "    {\n";
+            file << "      \"type\": ";
+
+            if (dynamic_cast<Line*>(shape.get())) {
+                file << "\"Line\"";
+            }
+            else if (dynamic_cast<Ellipse*>(shape.get())) {
+                file << "\"Ellipse\"";
+            }
+            else if (dynamic_cast<Rectangle*>(shape.get())) {
+                file << "\"Rectangle\"";
+            }
+            else if (dynamic_cast<Triangle*>(shape.get())) {
+                file << "\"Triangle\"";
+            }
+            else if (dynamic_cast<BezierCurve*>(shape.get())) {
+                file << "\"BezierCurve\"";
+            }
+
+            file << ",\n";
+            file << "      \"borderColor\": [" << (int)shape->borderColor.r << ", " << (int)shape->borderColor.g << ", " << (int)shape->borderColor.b << ", " << (int)shape->borderColor.a << "],\n";
+            file << "      \"fillColor\": [" << (int)shape->fillColor.r << ", " << (int)shape->fillColor.g << ", " << (int)shape->fillColor.b << ", " << (int)shape->fillColor.a << "],\n";
+            file << "      \"thickness\": " << shape->thickness << ",\n";
+            file << "      \"filled\": " << (shape->filled ? "true" : "false") << ",\n";
+
+            // Guardar puntos de control
+            file << "      \"controlPoints\": [\n";
+            auto pts = shape->getControlPoints();
+            for (size_t j = 0; j < pts.size(); ++j) {
+                file << "        [" << pts[j].first << ", " << pts[j].second << "]";
+                if (j < pts.size() - 1) file << ",";
+                file << "\n";
+            }
+            file << "      ]\n";
+
+            file << "    }";
+            if (i < m_shapes.size() - 1) file << ",";
+            file << "\n";
+        }
+
+        file << "  ]\n";
+        file << "}\n";
+
+        file.close();
+        std::cout << "Shapes saved to " << filename << std::endl;
+    }
+
+    // JSON load implementation
+    void loadFromJSON(const std::string& filename) {
+        std::ifstream file(filename);
+        if (!file.is_open()) { std::cerr << "Failed to open file for loading: " << filename << std::endl; return; }
+        std::stringstream ss; ss << file.rdbuf();
+        std::string s = ss.str();
+        m_shapes.clear();
+        size_t pos = 0;
+        // find shapes array
+        pos = s.find("\"shapes\"");
+        if (pos == std::string::npos) return;
+        pos = s.find('[', pos);
+        if (pos == std::string::npos) return;
+        ++pos;
+        while (pos < s.size()) {
+            // find next object start '{'
+            size_t objStart = s.find('{', pos);
+            if (objStart == std::string::npos) break;
+            // find matching closing '}' by counting braces
+            int depth = 0;
+            size_t i = objStart;
+            bool foundEnd = false;
+            for (; i < s.size(); ++i) {
+                if (s[i] == '{') depth++;
+                else if (s[i] == '}') {
+                    depth--;
+                    if (depth == 0) { foundEnd = true; break; }
+                }
+            }
+            if (!foundEnd) break;
+            size_t objEnd = i;
+            std::string obj = s.substr(objStart, objEnd - objStart + 1);
+
+            // parse type
+            std::string type = parseQuotedString(obj, "\"type\"", 0);
+
+            // parse borderColor and fillColor (arrays)
+            size_t tempPos = 0;
+            std::vector<int> border = parseIntArray(obj, obj.find("\"borderColor\""), tempPos);
+            std::vector<int> fill = parseIntArray(obj, obj.find("\"fillColor\""), tempPos);
+
+            // thickness (robust int parsing)
+            int thickness = 1;
+            size_t thPos = obj.find("\"thickness\"");
+            if (thPos != std::string::npos) {
+                size_t colon = obj.find(':', thPos);
+                if (colon != std::string::npos) {
+                    size_t start = colon + 1;
+                    while (start < obj.size() && isspace((unsigned char)obj[start])) ++start;
+                    size_t end = start;
+                    if (end < obj.size() && (obj[end] == '+' || obj[end] == '-')) ++end;
+                    while (end < obj.size() && isdigit((unsigned char)obj[end])) ++end;
+                    if (end > start) {
+                        thickness = std::stoi(obj.substr(start, end - start));
+                    }
+                }
+            }
+
+            // filled (bool)
+            bool filled = false;
+            size_t fPos = obj.find("\"filled\"");
+            if (fPos != std::string::npos) {
+                size_t colon = obj.find(':', fPos);
+                if (colon != std::string::npos) {
+                    size_t start = colon + 1;
+                    while (start < obj.size() && isspace((unsigned char)obj[start])) ++start;
+                    if (obj.compare(start, 4, "true") == 0) filled = true;
+                }
+            }
+
+            // controlPoints (flat ints -> pairs)
+            std::vector<int> flatPts = parseIntArray(obj, obj.find("\"controlPoints\""), tempPos);
+            std::vector<std::pair<int,int>> pts;
+            for (size_t k = 0; k + 1 < flatPts.size(); k += 2) pts.push_back({ flatPts[k], flatPts[k+1] });
+
+            // create shape
+            std::unique_ptr<Shape> shape;
+            if (type == "Line") {
+                auto p = std::make_unique<Line>();
+                if (pts.size()>=2) { p->x0 = pts[0].first; p->y0 = pts[0].second; p->x1 = pts[1].first; p->y1 = pts[1].second; }
+                shape = std::move(p);
+            } else if (type == "Ellipse") {
+                auto p = std::make_unique<Ellipse>();
+                if (pts.size()>=4) { int xmin=pts[0].first, xmax=pts[0].first, ymin=pts[0].second, ymax=pts[0].second; for(auto &pp:pts){ xmin=std::min(xmin,pp.first); xmax=std::max(xmax,pp.first); ymin=std::min(ymin,pp.second); ymax=std::max(ymax,pp.second);} p->cx=(xmin+xmax)/2; p->cy=(ymin+ymax)/2; p->a=std::max(1,(xmax-xmin)/2); p->b=std::max(1,(ymax-ymin)/2); }
+                shape = std::move(p);
+            } else if (type == "Rectangle") {
+                auto p = std::make_unique<Rectangle>();
+                if (pts.size()>=4) { int xmin=pts[0].first, xmax=pts[0].first, ymin=pts[0].second, ymax=pts[0].second; for(auto &pp:pts){ xmin=std::min(xmin,pp.first); xmax=std::max(xmax,pp.first); ymin=std::min(ymin,pp.second); ymax=std::max(ymax,pp.second);} p->xmin=xmin; p->xmax=xmax; p->ymin=ymin; p->ymax=ymax; }
+                shape = std::move(p);
+            } else if (type == "Triangle") {
+                auto p = std::make_unique<Triangle>();
+                if (pts.size()>=3) { p->x0=pts[0].first; p->y0=pts[0].second; p->x1=pts[1].first; p->y1=pts[1].second; p->x2=pts[2].first; p->y2=pts[2].second; }
+                shape = std::move(p);
+            } else if (type == "BezierCurve") {
+                auto p = std::make_unique<BezierCurve>();
+                p->controlPoints = pts;
+                shape = std::move(p);
+            }
+            if (shape) {
+                if (border.size() >= 4) { shape->borderColor = { (unsigned char)border[0], (unsigned char)border[1], (unsigned char)border[2], (unsigned char)border[3] }; }
+                if (fill.size() >= 4) { shape->fillColor = { (unsigned char)fill[0], (unsigned char)fill[1], (unsigned char)fill[2], (unsigned char)fill[3] }; }
+                shape->thickness = thickness;
+                shape->filled = filled;
+                m_shapes.push_back(std::move(shape));
+            }
+
+            pos = objEnd + 1;
+        }
+        std::cout << "Shapes loaded from " << filename << std::endl;
+    }
+
+    // Helper: parse integer array [a, b, c] starting at pos of '['
+    static std::vector<int> parseIntArray(const std::string& s, size_t startPos, size_t& outPos) {
+        std::vector<int> res;
+        size_t p = s.find('[', startPos);
+        if (p == std::string::npos) { outPos = startPos; return res; }
+        ++p; // after [
+        while (p < s.size()) {
+            // skip whitespace
+            while (p < s.size() && isspace((unsigned char)s[p])) ++p;
+            if (p >= s.size()) break;
+            if (s[p] == ']') { ++p; break; }
+            // read number (could be negative)
+            bool neg = false;
+            if (s[p] == '-') { neg = true; ++p; }
+            long long val = 0;
+            bool haveDigit = false;
+            while (p < s.size() && isdigit((unsigned char)s[p])) { haveDigit = true; val = val * 10 + (s[p] - '0'); ++p; }
+            if (haveDigit) {
+                if (neg) val = -val;
+                res.push_back((int)val);
+            }
+            // skip to next comma or ]
+            while (p < s.size() && s[p] != ',' && s[p] != ']') ++p;
+            if (p < s.size() && s[p] == ',') ++p;
+        }
+        outPos = p;
+        return res;
+    }
+
+    // Helper: find quoted string after a key name
+    static std::string parseQuotedString(const std::string& s, const std::string& key, size_t startPos) {
+        size_t k = s.find(key, startPos);
+        if (k == std::string::npos) return "";
+        size_t q = s.find('"', k + key.size());
+        if (q == std::string::npos) return "";
+        size_t q2 = s.find('"', q + 1);
+        if (q2 == std::string::npos) return "";
+        return s.substr(q + 1, q2 - (q + 1));
+    }
+
 };
+
 
 int main() {
     CMyTest test;
