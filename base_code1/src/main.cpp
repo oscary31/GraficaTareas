@@ -1,4 +1,7 @@
-﻿#include "PixelRender.h"
+﻿// (El contenido del archivo original se mantiene; aquí se muestran las modificaciones
+// y el archivo completo actualizado para facilidad de copia/pega.)
+
+#include "PixelRender.h"
 #include <iostream>
 #include <vector>
 #include <set>
@@ -8,6 +11,8 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
+
+#define M_PI       3.14159265358979323846
 
 class CMyTest : public CPixelRender
 {
@@ -31,6 +36,9 @@ private:
 	// Colores de fondo
 	float m_bgColorArray[4] = { 201.0f / 255.0f, 201.0f / 255.0f, 201.0f / 255.0f, 1.0f };
 	RGBA m_bgColor = { 216, 216, 216, 255 };
+
+	// Flag: usar primitivas de ImGui (ImDrawList) en vez de mis implementaciones
+	bool m_useImGuiPrimitives = false;
 
 	// Base class para todas las figuras
 	struct Shape {
@@ -93,12 +101,21 @@ private:
 			}
 		}
 		std::vector<std::pair<int, int>> getControlPoints() override {
-			// usar bounding box 4 esquinas
-			return { {cx - a, cy - b}, {cx + a, cy - b}, {cx + a, cy + b}, {cx - a, cy + b} };
+			// cuatro esquinas del bounding box + centro
+			std::vector<std::pair<int, int>> pts = { {cx - a, cy - b}, {cx + a, cy - b}, {cx + a, cy + b}, {cx - a, cy + b} };
+			pts.push_back({ cx, cy });
+			return pts;
 		}
 		void setControlPoint(int idx, int x, int y) override {
 			auto pts = getControlPoints();
 			if (idx < 0 || idx >= (int)pts.size()) return;
+			// center handle (último índice) -> mover la elipse manteniendo a,b
+			if (idx == (int)pts.size() - 1) {
+				int dx = x - cx;
+				int dy = y - cy;
+				moveBy(dx, dy);
+				return;
+			}
 			std::pair<int, int> other;
 			if (idx == 0) other = pts[2]; // opuesto
 			else if (idx == 1) other = pts[3];
@@ -151,11 +168,23 @@ private:
 			}
 		}
 		std::vector<std::pair<int, int>> getControlPoints() override {
-			return { {xmin,ymin}, {xmax,ymin}, {xmax,ymax}, {xmin,ymax} };
+			// cuatro esquinas + centro
+			int cx = (xmin + xmax) / 2;
+			int cy = (ymin + ymax) / 2;
+			return { {xmin,ymin}, {xmax,ymin}, {xmax,ymax}, {xmin,ymax}, {cx,cy} };
 		}
 		void setControlPoint(int idx, int x, int y) override {
 			std::vector<std::pair<int, int>> pts = getControlPoints();
 			if (idx < 0 || idx >= (int)pts.size()) return;
+			// center handle (último índice) -> mover rect
+			if (idx == (int)pts.size() - 1) {
+				int cx = (xmin + xmax) / 2;
+				int cy = (ymin + ymax) / 2;
+				int dx = x - cx;
+				int dy = y - cy;
+				moveBy(dx, dy);
+				return;
+			}
 			if (idx == 0) { xmin = x; ymin = y; }
 			else if (idx == 1) { xmax = x; ymin = y; }
 			else if (idx == 2) { xmax = x; ymax = y; }
@@ -197,12 +226,22 @@ private:
 			}
 		}
 		std::vector<std::pair<int, int>> getControlPoints() override {
-			return { {x0,y0}, {x1,y1}, {x2,y2} };
+			// tres vértices + centroid (centro de masa) como handle de movimiento
+			int cx = (x0 + x1 + x2) / 3;
+			int cy = (y0 + y1 + y2) / 3;
+			return { {x0,y0}, {x1,y1}, {x2,y2}, {cx,cy} };
 		}
 		void setControlPoint(int idx, int x, int y) override {
 			if (idx == 0) { x0 = x; y0 = y; }
 			else if (idx == 1) { x1 = x; y1 = y; }
 			else if (idx == 2) { x2 = x; y2 = y; }
+			else if (idx == 3) { // centroid -> mover triángulo completo
+				int cx = (x0 + x1 + x2) / 3;
+				int cy = (y0 + y1 + y2) / 3;
+				int dx = x - cx;
+				int dy = y - cy;
+				moveBy(dx, dy);
+			}
 		}
 		void moveBy(int dx, int dy) override {
 			x0 += dx; y0 += dy; x1 += dx; y1 += dy; x2 += dx; y2 += dy;
@@ -410,11 +449,11 @@ private:
 		if (!m_cursorHand)  m_cursorHand = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
 
 		// Usamos HRESIZE como fallback para indicar cambio de tamaño (diagonal no siempre disponible)
-		#if defined(GLFW_HRESIZE_CURSOR)
-				if (!m_cursorResize) m_cursorResize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
-		#else
-				if (!m_cursorResize) m_cursorResize = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
-		#endif
+#if defined(GLFW_HRESIZE_CURSOR)
+		if (!m_cursorResize) m_cursorResize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
+#else
+		if (!m_cursorResize) m_cursorResize = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
+#endif
 	}
 
 	struct TriangleFillInfo {
@@ -917,8 +956,11 @@ public:
 		std::fill(m_buffer.begin(), m_buffer.end(), m_bgColor);
 		framesThisSecond++;
 
-		for (const auto& shape : m_shapes) {
-			shape->draw(this);
+		// Dibujar sólo con mis primitivas si NO estamos usando ImGui draw_list
+		if (!m_useImGuiPrimitives) {
+			for (const auto& shape : m_shapes) {
+				shape->draw(this);
+			}
 		}
 
 		// Dibujar handles para la figura seleccionada (si existe)
@@ -949,7 +991,7 @@ public:
 		}
 
 		if (m_drawMode == 4 && m_tempControlPoints.size() > 0) {
-			// Cuando estamos creando (temp control points) dibujamos el polígono/handles aquí
+			// Cuando estamos creando (temp control points) dibujamos el polígono/handles aquí (sigue dibujando al buffer)
 			for (size_t i = 0; i < m_tempControlPoints.size(); ++i) {
 				const auto& p = m_tempControlPoints[i];
 				if (i < m_tempControlPoints.size() - 1) {
@@ -1335,17 +1377,48 @@ public:
 		bool overControlPoint = (bzHit && bezCp >= 0) || (sHit && handleIdx >= 0);
 		bool overShape = (bzHit != nullptr) || (sHit != nullptr);
 
+		// Helper: determinar si un handle es el handle "central" (último índice)
+		auto isCentralHandle = [](Shape* s, int idx)->bool {
+			if (!s || idx < 0) return false;
+			auto pts = s->getControlPoints();
+			if (pts.empty()) return false;
+			return idx == (int)pts.size() - 1;
+			};
+
 		// Si estamos en drag, mantener el cursor correspondiente
 		// Preferimos el estado de arrastre (drag) si está activo
 		GLFWcursor* targetCursor = m_cursorArrow;
 		if (mouseButtonsDown[0] && (m_isDraggingHandle || m_isDraggingControlPoint)) {
-			if (m_selectedHandleIndex >= 0) targetCursor = m_cursorResize;
-			else targetCursor = m_cursorHand;
+			if (m_selectedHandleIndex >= 0) {
+				// Si el handle seleccionado es el central, mostrar mano; si no, resize
+				bool central = isCentralHandle(m_selectedShape, m_selectedHandleIndex);
+				targetCursor = central ? m_cursorHand : m_cursorResize;
+			}
+			else {
+				targetCursor = m_cursorHand;
+			}
 		}
 		else {
-			if (overControlPoint) targetCursor = m_cursorResize;
-			else if (overShape) targetCursor = m_cursorHand;
-			else targetCursor = m_cursorArrow;
+			// Hover: si hay un control point bajo el cursor, elegir cursor según si es el central
+			if (overControlPoint) {
+				bool centralHover = false;
+				// Priorizar bezier control points (no tienen "central" especial)
+				if (bzHit && bezCp >= 0) {
+					centralHover = false;
+				}
+				else if (sHit && handleIdx >= 0) {
+					centralHover = isCentralHandle(sHit, handleIdx);
+				}
+
+				// central -> mano, otherwise -> resize
+				targetCursor = centralHover ? m_cursorHand : m_cursorResize;
+			}
+			else if (overShape) {
+				targetCursor = m_cursorHand;
+			}
+			else {
+				targetCursor = m_cursorArrow;
+			}
 		}
 
 		// Aplicar cursor si es distinto al actual
@@ -1385,24 +1458,26 @@ public:
 						// If Shift is pressed, constrain ellipse->circle and rectangle->square
 						bool shift = (glfwGetKey(m_window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) || (glfwGetKey(m_window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
 						if (shift) {
-							// Only apply for Ellipse and Rectangle corner handles
+							// Only apply for Ellipse and Rectangle corner handles (indices 0..3)
 							Rectangle* rc = dynamic_cast<Rectangle*>(m_selectedShape);
 							Ellipse* el = dynamic_cast<Ellipse*>(m_selectedShape);
 							if (rc || el) {
 								int idx = m_selectedHandleIndex;
-								// opposite corner index (corners are 0..3)
-								int opIdx = (idx + 2) % 4;
-								if (opIdx < (int)m_dragStartPoints.size()) {
-									int opx = m_dragStartPoints[opIdx].first;
-									int opy = m_dragStartPoints[opIdx].second;
+								if (idx >= 0 && idx <= 3) {
+									// opposite corner index (corners are 0..3)
+									int opIdx = (idx + 2) % 4;
+									if (opIdx < (int)m_dragStartPoints.size()) {
+										int opx = m_dragStartPoints[opIdx].first;
+										int opy = m_dragStartPoints[opIdx].second;
 
-									int dxAbs = std::abs(newX - opx);
-									int dyAbs = std::abs(newY - opy);
-									int d = std::max(dxAbs, dyAbs);
-									int sx = (newX >= opx) ? 1 : -1;
-									int sy = (newY >= opy) ? 1 : -1;
-									newX = opx + sx * d;
-									newY = opy + sy * d;
+										int dxAbs = std::abs(newX - opx);
+										int dyAbs = std::abs(newY - opy);
+										int d = std::max(dxAbs, dyAbs);
+										int sx = (newX >= opx) ? 1 : -1;
+										int sy = (newY >= opy) ? 1 : -1;
+										newX = opx + sx * d;
+										newY = opy + sy * d;
+									}
 								}
 							}
 						}
@@ -1653,6 +1728,12 @@ public:
 			}
 		}
 
+		// Checkbox: elegir ImGui primitives vs mis primitivas
+		ImGui::Separator();
+		ImGui::Checkbox("Use ImGui Primitives", &m_useImGuiPrimitives);
+		ImGui::SameLine();
+		ImGui::TextDisabled("(overlay)");
+
 		// If selected shape is Bezier, show subdivision/elevation UI
 		BezierCurve* bz = dynamic_cast<BezierCurve*>(m_selectedShape);
 		if (bz) {
@@ -1747,6 +1828,169 @@ public:
 
 		ImGui::End();
 		ImGui::PopStyleVar();
+
+		// --------------------- ImGui overlay drawing usando ImDrawList ---------------------
+		if (m_useImGuiPrimitives) {
+			// Calculamos la posición del canvas en pantalla.
+			// El panel de control deja 350 px a la izquierda (fijo en este diseño).
+			ImDrawList* draw_list = ImGui::GetForegroundDrawList();
+			const float canvasOffsetX = 0.0f;
+			const float canvasOffsetY = 0.0f;
+
+			// Helper: convertir coordenadas del motor (origen en bottom-left) a coords de pantalla (top-left)
+			auto toScreen = [&](int x, int y) -> ImVec2 {
+				float sx = canvasOffsetX + (float)x;
+				float sy = (float)(height - 1 - y) + canvasOffsetY;
+				return ImVec2(sx, sy);
+				};
+
+			// Dibujar fondo oscuro para el canvas (solo decoración)
+			ImVec2 topLeft = ImVec2(canvasOffsetX, canvasOffsetY);
+			ImVec2 bottomRight = ImVec2(canvasOffsetX + (float)width - 350.0f, canvasOffsetY + (float)height);
+			// No cubrir todo; solo un rect transparente opcional.
+			// draw_list->AddRectFilled(topLeft, bottomRight, IM_COL32(30, 30, 30, 50));
+
+			// Iterar figuras para dibujarlas con ImDrawList
+			for (const auto& sPtr : m_shapes) {
+				Shape* s = sPtr.get();
+
+				if (auto ln = dynamic_cast<Line*>(s)) {
+					ImVec2 a = toScreen(ln->x0, ln->y0);
+					ImVec2 b = toScreen(ln->x1, ln->y1);
+					draw_list->AddLine(a, b, IM_COL32(ln->borderColor.r, ln->borderColor.g, ln->borderColor.b, ln->borderColor.a), (float)ln->thickness);
+				}
+				else if (auto rc = dynamic_cast<Rectangle*>(s)) {
+					ImVec2 p0 = toScreen(rc->xmin, rc->ymin);
+					ImVec2 p1 = toScreen(rc->xmax, rc->ymax);
+					// ImDrawList espera top-left y < bottom-right y, pero ya convertimos.
+					if (rc->filled) {
+						// ImDrawList::AddRectFilled usa esquina superior izquierda y inferior derecha
+						ImVec2 tl = ImVec2(p0.x, p1.y);
+						ImVec2 br = ImVec2(p1.x, p0.y);
+						draw_list->AddRectFilled(tl, br, IM_COL32(rc->fillColor.r, rc->fillColor.g, rc->fillColor.b, rc->fillColor.a));
+						draw_list->AddRect(tl, br, IM_COL32(rc->borderColor.r, rc->borderColor.g, rc->borderColor.b, rc->borderColor.a), 0.0f, 0, (float)rc->thickness);
+					}
+					else {
+						ImVec2 tl = ImVec2(p0.x, p1.y);
+						ImVec2 br = ImVec2(p1.x, p0.y);
+						draw_list->AddRect(tl, br, IM_COL32(rc->borderColor.r, rc->borderColor.g, rc->borderColor.b, rc->borderColor.a), 0.0f, 0, (float)rc->thickness);
+					}
+				}
+				else if (auto el = dynamic_cast<Ellipse*>(s)) {
+					// Aproximar elipse muestreando puntos
+					int segments = 64;
+					std::vector<ImVec2> pts;
+					pts.reserve(segments + 1);
+					for (int i = 0; i <= segments; ++i) {
+						float t = (float)i / (float)segments;
+						float ang = t * (float)(2.0 * M_PI);
+						float px = (float)el->cx + std::cos(ang) * (float)el->a;
+						float py = (float)el->cy + std::sin(ang) * (float)el->b;
+						pts.push_back(toScreen((int)std::lround(px), (int)std::lround(py)));
+					}
+					if (el->filled) {
+						draw_list->AddConvexPolyFilled(pts.data(), (int)pts.size(), IM_COL32(el->fillColor.r, el->fillColor.g, el->fillColor.b, el->fillColor.a));
+						// Borde
+						draw_list->AddPolyline(pts.data(), (int)pts.size(), IM_COL32(el->borderColor.r, el->borderColor.g, el->borderColor.b, el->borderColor.a), true, (float)el->thickness);
+					}
+					else {
+						draw_list->AddPolyline(pts.data(), (int)pts.size(), IM_COL32(el->borderColor.r, el->borderColor.g, el->borderColor.b, el->borderColor.a), true, (float)el->thickness);
+					}
+				}
+				else if (auto tr = dynamic_cast<Triangle*>(s)) {
+					ImVec2 p0 = toScreen(tr->x0, tr->y0);
+					ImVec2 p1 = toScreen(tr->x1, tr->y1);
+					ImVec2 p2 = toScreen(tr->x2, tr->y2);
+					ImVec2 arr[3] = { p0, p1, p2 };
+					if (tr->filled) {
+						draw_list->AddConvexPolyFilled(arr, 3, IM_COL32(tr->fillColor.r, tr->fillColor.g, tr->fillColor.b, tr->fillColor.a));
+						draw_list->AddPolyline(arr, 3, IM_COL32(tr->borderColor.r, tr->borderColor.g, tr->borderColor.b, tr->borderColor.a), true, (float)tr->thickness);
+					}
+					else {
+						draw_list->AddPolyline(arr, 3, IM_COL32(tr->borderColor.r, tr->borderColor.g, tr->borderColor.b, tr->borderColor.a), true, (float)tr->thickness);
+					}
+				}
+				else if (auto bz = dynamic_cast<BezierCurve*>(s)) {
+					// Muestrear curva y dibujar líneas entre muestras
+					int segments = 100;
+					ImVec2 prev = toScreen(deCasteljau(bz->controlPoints, 0.0f).first, deCasteljau(bz->controlPoints, 0.0f).second);
+					for (int i = 1; i <= segments; ++i) {
+						float t = (float)i / (float)segments;
+						auto p = deCasteljau(bz->controlPoints, t);
+						ImVec2 cur = toScreen(p.first, p.second);
+						draw_list->AddLine(prev, cur, IM_COL32(bz->borderColor.r, bz->borderColor.g, bz->borderColor.b, bz->borderColor.a), (float)bz->thickness);
+						prev = cur;
+					}
+					// Si la curva está seleccionada, dibujar polígono de control
+					if (m_selectedShape == bz) {
+						for (size_t i = 0; i + 1 < bz->controlPoints.size(); ++i) {
+							ImVec2 A = toScreen(bz->controlPoints[i].first, bz->controlPoints[i].second);
+							ImVec2 B = toScreen(bz->controlPoints[i + 1].first, bz->controlPoints[i + 1].second);
+							draw_list->AddLine(A, B, IM_COL32(m_controlPolygonColor.r, m_controlPolygonColor.g, m_controlPolygonColor.b, m_controlPolygonColor.a), 1.0f);
+						}
+					}
+				}
+			}
+
+			// Dibujar handles / puntos de control con ImDrawList si hay selección
+			if (m_selectedShape) {
+				auto pts = m_selectedShape->getControlPoints();
+				for (size_t i = 0; i < pts.size(); ++i) {
+					ImVec2 p = toScreen(pts[i].first, pts[i].second);
+					RGBA col = (m_selectedHandleIndex == (int)i) ? m_selectedControlPointColor : m_controlPointColor;
+					draw_list->AddCircleFilled(p, (float)m_controlPointRadius, IM_COL32(col.r, col.g, col.b, col.a));
+				}
+				if (m_selectedHandleIndex == -1) {
+					auto pts2 = m_selectedShape->getControlPoints();
+					if (!pts2.empty()) {
+						int xmin = pts2[0].first, xmax = pts2[0].first, ymin = pts2[0].second, ymax = pts2[0].second;
+						for (auto& p : pts2) {
+							xmin = std::min(xmin, p.first);
+							xmax = std::max(xmax, p.first);
+							ymin = std::min(ymin, p.second);
+							ymax = std::max(ymax, p.second);
+						}
+						ImVec2 tl = toScreen(xmin - 8, ymax + 8);
+						ImVec2 br = toScreen(xmax + 8, ymin - 8);
+						draw_list->AddRect(tl, br, IM_COL32(m_selectionHandleColor.r, m_selectionHandleColor.g, m_selectionHandleColor.b, m_selectionHandleColor.a), 0.0f, 0, 1.0f);
+					}
+				}
+			}
+
+			// Si estamos creando una Bezier temporal (m_tempControlPoints), dibujarla con ImGui también
+			if (m_drawMode == 4 && m_tempControlPoints.size() > 0) {
+				for (size_t i = 0; i < m_tempControlPoints.size(); ++i) {
+					ImVec2 p = toScreen(m_tempControlPoints[i].first, m_tempControlPoints[i].second);
+					draw_list->AddCircleFilled(p, (float)m_controlPointRadius, IM_COL32(m_controlPointColor.r, m_controlPointColor.g, m_controlPointColor.b, m_controlPointColor.a));
+					if (i + 1 < m_tempControlPoints.size()) {
+						ImVec2 q = toScreen(m_tempControlPoints[i + 1].first, m_tempControlPoints[i + 1].second);
+						draw_list->AddLine(p, q, IM_COL32(m_controlPolygonColor.r, m_controlPolygonColor.g, m_controlPolygonColor.b, m_controlPolygonColor.a), 1.0f);
+					}
+				}
+				// línea hacia cursor
+				double xpos_d, ypos_d;
+				glfwGetCursorPos(m_window, &xpos_d, &ypos_d);
+				int cx = static_cast<int>(xpos_d);
+				int cy = height - 1 - static_cast<int>(ypos_d);
+				ImVec2 last = toScreen(m_tempControlPoints.back().first, m_tempControlPoints.back().second);
+				ImVec2 cur = toScreen(cx, cy);
+				draw_list->AddLine(last, cur, IM_COL32(m_controlPolygonColor.r, m_controlPolygonColor.g, m_controlPolygonColor.b, m_controlPolygonColor.a), 1.0f);
+
+				// preview de la curva muestreada
+				if (m_tempControlPoints.size() >= 2) {
+					int segments = 100;
+					auto p0 = deCasteljauTemp(m_tempControlPoints, 0.0f);
+					ImVec2 prev = toScreen(p0.first, p0.second);
+					for (int i = 1; i <= segments; ++i) {
+						float t = (float)i / (float)segments;
+						auto p = deCasteljauTemp(m_tempControlPoints, t);
+						ImVec2 curp = toScreen(p.first, p.second);
+						draw_list->AddLine(prev, curp, IM_COL32(m_borderColor.r, m_borderColor.g, m_borderColor.b, m_borderColor.a), (float)m_lineThickness);
+						prev = curp;
+					}
+				}
+			}
+		}
 
 		ImGui::Render();
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
