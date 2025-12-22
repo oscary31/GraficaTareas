@@ -58,9 +58,10 @@ private:
 
 
 
-protected:
+public:
     int width = 1200;
     int height = 800;
+protected:
     int m_nPixels = 100000;
     GLFWwindow* m_window = nullptr;
     std::vector<RGBA> m_buffer;

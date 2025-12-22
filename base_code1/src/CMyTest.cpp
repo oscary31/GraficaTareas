@@ -68,321 +68,6 @@ void CMyTest::setThickPixel(int x, int y, RGBA color, int thickness)
     }
 }
 
-void CMyTest::drawLineBresenham(int x0, int y0, int x1, int y1, RGBA color, int thickness, bool clear)
-{
-    if (clear) m_drawnPixels.clear();
-
-    int dx = x1 - x0;
-    int dy = y1 - y0;
-    int absDx = abs(dx);
-    int absDy = abs(dy);
-
-    if (absDy < absDx && dx > 0 && dy >= 0)
-    {
-        int d = absDx - 2 * absDy;
-        int incE = -2 * absDy;
-        int incNE = 2 * (absDx - absDy);
-        int x = x0, y = y0;
-
-        setThickPixel(x, y, color, thickness);
-        while (x < x1)
-        {
-            if (d <= 0) { d += incNE; y++; }
-            else { d += incE; }
-            x++;
-            setThickPixel(x, y, color, thickness);
-        }
-    }
-    else if (absDy >= absDx && dx >= 0 && dy > 0)
-    {
-        int d = absDy - 2 * absDx;
-        int incN = -2 * absDx;
-        int incNE = 2 * (absDy - absDx);
-        int x = x0, y = y0;
-
-        setThickPixel(x, y, color, thickness);
-        while (y < y1)
-        {
-            if (d <= 0) { d += incNE; x++; }
-            else { d += incN; }
-            y++;
-            setThickPixel(x, y, color, thickness);
-        }
-    }
-    else if (absDy < absDx && dx > 0 && dy < 0)
-    {
-        int d = absDx - 2 * absDy;
-        int incE = -2 * absDy;
-        int incSE = 2 * (absDx - absDy);
-        int x = x0, y = y0;
-
-        setThickPixel(x, y, color, thickness);
-        while (x < x1)
-        {
-            if (d <= 0) { d += incSE; y--; }
-            else { d += incE; }
-            x++;
-            setThickPixel(x, y, color, thickness);
-        }
-    }
-    else if (absDy >= absDx && dx >= 0 && dy < 0)
-    {
-        int d = absDy - 2 * absDx;
-        int incS = -2 * absDx;
-        int incSE = 2 * (absDy - absDx);
-        int x = x0, y = y0;
-
-        setThickPixel(x, y, color, thickness);
-        while (y > y1)
-        {
-            if (d <= 0) { d += incSE; x++; }
-            else { d += incS; }
-            y--;
-            setThickPixel(x, y, color, thickness);
-        }
-    }
-    else if (dx < 0)
-    {
-        drawLineBresenham(x1, y1, x0, y0, color, thickness, clear);
-    }
-}
-
-void CMyTest::drawLine(int x0, int y0, int x1, int y1, RGBA color, int thickness)
-{
-    drawLineBresenham(x0, y0, x1, y1, color, thickness, true);
-}
-
-void CMyTest::ellipsePoints4(long long cx, long long cy, long long x, long long y, RGBA color, int thickness)
-{
-    setThickPixel(static_cast<int>(cx + x), static_cast<int>(cy + y), color, thickness);
-    setThickPixel(static_cast<int>(cx - x), static_cast<int>(cy + y), color, thickness);
-    setThickPixel(static_cast<int>(cx + x), static_cast<int>(cy - y), color, thickness);
-    setThickPixel(static_cast<int>(cx - x), static_cast<int>(cy - y), color, thickness);
-}
-
-void CMyTest::drawEllipseOutline(int cx, int cy, int a, int b, RGBA color, int thickness)
-{
-    m_drawnPixels.clear();
-
-    if (a <= 0 || b <= 0) return;
-
-    long long a2 = static_cast<long long>(a) * static_cast<long long>(a);
-    long long b2 = static_cast<long long>(b) * static_cast<long long>(b);
-
-    long long x = 0;
-    long long y = b;
-
-    long long dx = 2 * b2 * x;
-    long long dy = 2 * a2 * y;
-
-    long long d1 = b2 - a2 * b + (a2 + 3) / 4;
-
-    long long twoB2 = 2 * b2;
-    long long twoA2 = 2 * a2;
-
-    while (dx < dy) {
-        ellipsePoints4(cx, cy, x, y, color, thickness);
-        if (d1 < 0) {
-            x += 1;
-            dx += twoB2;
-            d1 += dx + b2;
-        }
-        else {
-            x += 1;
-            y -= 1;
-            dx += twoB2;
-            dy -= twoA2;
-            d1 += dx - dy + b2;
-        }
-    }
-
-    long long d2_num_x = (2 * x + 1);
-    long long d2 = b2 * (d2_num_x * d2_num_x) / 4 + a2 * (y - 1) * (y - 1) - a2 * b2;
-    while (y >= 0) {
-        ellipsePoints4(cx, cy, x, y, color, thickness);
-        if (d2 > 0) {
-            y -= 1;
-            dy -= twoA2;
-            d2 += a2 - dy;
-        }
-        else {
-            y -= 1;
-            x += 1;
-            dx += twoB2;
-            dy -= twoA2;
-            d2 += dx - dy + a2;
-        }
-    }
-}
-
-void CMyTest::drawRectangleOutline(int x0, int y0, int x1, int y1, RGBA color, int thickness)
-{
-    int xmin = std::min(x0, x1);
-    int xmax = std::max(x0, x1);
-    int ymin = std::min(y0, y1);
-    int ymax = std::max(y0, y1);
-
-    drawLine(xmin, ymin, xmax, ymin, color, thickness);
-    drawLine(xmin, ymax, xmax, ymax, color, thickness);
-    drawLine(xmin, ymin, xmin, ymax, color, thickness);
-    drawLine(xmax, ymin, xmax, ymax, color, thickness);
-}
-
-void CMyTest::drawTriangleOutline(int x0, int y0, int x1, int y1, int x2, int y2, RGBA color, int thickness)
-{
-    drawLine(x0, y0, x1, y1, color, thickness);
-    drawLine(x1, y1, x2, y2, color, thickness);
-    drawLine(x2, y2, x0, y0, color, thickness);
-}
-
-void CMyTest::drawHorizontalLine(int x0, int x1, int y, RGBA color)
-{
-    if (x0 > x1) std::swap(x0, x1);
-    for (int x = x0; x <= x1; ++x) {
-        setPixel(x, y, color);
-    }
-}
-
-void CMyTest::drawTriangleFilled(int x0, int y0, int x1, int y1, int x2, int y2, RGBA fillColor, RGBA borderColor, int thickness)
-{
-    // Variable auxiliar para acumular los píxeles del borde
-    std::set<std::pair<int, int>> borderPixels;
-
-    // Dibujar cada arista y acumular sus píxeles
-    m_drawnPixels.clear();
-    drawLine(x0, y0, x1, y1, borderColor, thickness);
-    borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
-
-    m_drawnPixels.clear();
-    drawLine(x1, y1, x2, y2, borderColor, thickness);
-    borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
-
-    m_drawnPixels.clear();
-    drawLine(x2, y2, x0, y0, borderColor, thickness);
-    borderPixels.insert(m_drawnPixels.begin(), m_drawnPixels.end());
-
-    m_drawnPixels.clear();
-
-    // Función para verificar si un punto está dentro del triángulo
-    auto isInsideTriangle = [](int px, int py, int x0, int y0, int x1, int y1, int x2, int y2) -> bool {
-        auto sign = [](int px, int py, int ax, int ay, int bx, int by) -> float {
-            return (px - bx) * (ay - by) - (ax - bx) * (py - by);
-            };
-
-        float d1 = sign(px, py, x0, y0, x1, y1);
-        float d2 = sign(px, py, x1, y1, x2, y2);
-        float d3 = sign(px, py, x2, y2, x0, y0);
-
-        bool has_neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-        bool has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-
-        return !(has_neg && has_pos);
-        };
-
-    // Bounding box del triángulo
-    int xmin = std::min({ x0, x1, x2 });
-    int xmax = std::max({ x0, x1, x2 });
-    int ymin = std::min({ y0, y1, y2 });
-    int ymax = std::max({ y0, y1, y2 });
-
-    // Rellenar solo los píxeles que están dentro y no son del borde
-    for (int y = ymin; y <= ymax; ++y) {
-        if (y < 0 || y >= height) continue;
-
-        for (int x = xmin; x <= xmax; ++x) {
-            if (x < 0 || x >= width) continue;
-
-            if (isInsideTriangle(x, y, x0, y0, x1, y1, x2, y2) &&
-                borderPixels.find({ x, y }) == borderPixels.end()) {
-                setPixel(x, y, fillColor);
-            }
-        }
-    }
-}
-
-void CMyTest::drawEllipseFilled(int cx, int cy, int a, int b, RGBA fillColor, RGBA borderColor, int thickness)
-{
-    if (a <= 0 || b <= 0) return;
-
-    // Dibujar borde primero (m_drawnPixels se llena)
-    drawEllipseOutline(cx, cy, a, b, borderColor, thickness);
-
-    // Guardar todos los píxeles del borde
-    std::set<std::pair<int, int>> borderPixels = m_drawnPixels;
-    m_drawnPixels.clear();
-
-    // Rellenar usando un radio amplio
-    int searchRadius = a + b;
-
-    for (int y = cy - searchRadius; y <= cy + searchRadius; ++y) {
-        if (y < 0 || y >= height) continue;
-
-        for (int x = cx - searchRadius; x <= cx + searchRadius; ++x) {
-            if (x < 0 || x >= width) continue;
-
-            if (borderPixels.find({ x, y }) != borderPixels.end()) {
-                continue;
-            }
-
-            float dx = static_cast<float>(x - cx) / static_cast<float>(a);
-            float dy = static_cast<float>(y - cy) / static_cast<float>(b);
-
-            if (dx * dx + dy * dy <= 1.0f) {
-                setPixel(x, y, fillColor);
-            }
-        }
-    }
-}
-
-void CMyTest::drawRectangleFilled(int x0, int y0, int x1, int y1, RGBA fillColor, RGBA borderColor, int thickness)
-{
-    int xmin = std::min(x0, x1);
-    int xmax = std::max(x0, x1);
-    int ymin = std::min(y0, y1);
-    int ymax = std::max(y0, y1);
-
-    drawRectangleOutline(xmin, ymin, xmax, ymax, borderColor, thickness);
-
-    int innerMargin = (thickness - 1) / 2;
-    int innerXmin = xmin + innerMargin + 1;
-    int innerXmax = xmax - innerMargin - 1;
-    int innerYmin = ymin + innerMargin + 1;
-    int innerYmax = ymax - innerMargin - 1;
-
-    if (innerXmin <= innerXmax && innerYmin <= innerYmax) {
-        for (int y = innerYmin; y <= innerYmax; ++y) {
-            drawHorizontalLine(innerXmin, innerXmax, y, fillColor);
-        }
-    }
-}
-
-std::pair<int, int> CMyTest::deCasteljau(const std::vector<std::pair<int, int>>& points, float t)
-{
-    if (points.empty()) return { 0, 0 };
-
-    std::vector<std::pair<float, float>> temp(points.size());
-    for (size_t i = 0; i < points.size(); ++i) {
-        temp[i] = { static_cast<float>(points[i].first), static_cast<float>(points[i].second) };
-    }
-
-    int n = temp.size() - 1;
-    for (int k = 1; k <= n; ++k) {
-        for (int i = 0; i <= n - k; ++i) {
-            temp[i].first = (1.0f - t) * temp[i].first + t * temp[i + 1].first;
-            temp[i].second = (1.0f - t) * temp[i].second + t * temp[i + 1].second;
-        }
-    }
-
-    int rx = static_cast<int>(std::lround(temp[0].first));
-    int ry = static_cast<int>(std::lround(temp[0].second));
-    return { rx, ry };
-}
-
-std::pair<int, int> CMyTest::deCasteljauTemp(const std::vector<std::pair<int, int>>& points, float t)
-{
-    return CMyTest::deCasteljau(points, t);
-}
-
 Shape* CMyTest::findShapeAt(int tx, int ty, int& outHandleIndex)
 {
     const int HANDLE_TOL = 10;
@@ -435,7 +120,7 @@ BezierCurve* CMyTest::findBezierCurveNear(int x, int y, int& controlPointIndex)
             int segments = 50;
             for (int j = 0; j <= segments; ++j) {
                 float t = (float)j / segments;
-                std::pair<int, int> p = deCasteljau(bezier->controlPoints, t);
+                std::pair<int, int> p = BezierCurve::deCasteljau(bezier->controlPoints, t);
                 int dx = p.first - x;
                 int dy = p.second - y;
                 if (dx * dx + dy * dy <= TOLERANCE * TOLERANCE) {
@@ -582,8 +267,7 @@ void CMyTest::saveToJPG(const std::string& filename, int quality)
 }
 
 // Funciones auxiliares para parsear el JSON
-
-    // Parsea arrays anidados como [[x1,y1], [x2,y2]]
+// Parsea arrays anidados como [[x1,y1], [x2,y2]]
 static std::vector<int> parseNestedIntArray(const std::string& s, size_t startPos)
 {
     std::vector<int> result;
@@ -658,7 +342,8 @@ static std::string parseQuotedString(const std::string& s, const std::string& ke
     return s.substr(firstQuote + 1, secondQuote - firstQuote - 1);
 }
 
-// Métodos de serialización (placeholder - implementación completa requiere más espacio)
+// Métodos de guardar y cargar JSON
+// El archivo se guarda en la carpeta raiz base_code1
 void CMyTest::saveToJSON(const std::string& filename)
 {
     std::ofstream file(filename);
@@ -995,8 +680,7 @@ void CMyTest::loadFromJSON(const std::string& filename)
     std::cout << "=======================================\n" << std::endl;
 }
 
-// Continuación de CMyTest.cpp - Sistema Undo/Redo
-
+// Métodos de deshacer/rehacer
 void CMyTest::applyAction(UndoAction& action, bool isUndo)
 {
     switch (action.type)
@@ -1208,12 +892,13 @@ std::string CMyTest::getLastActionDescription() const
     }
 }
 
+
 void CMyTest::update()
 {
     std::fill(m_buffer.begin(), m_buffer.end(), m_bgColor);
     framesThisSecond++;
 
-    // Dibujar con primitivas propias si NO se usan las primitivas de ImGui
+    // Dibujar con primitivas propias si no se usan las primitivas de ImGui
     if (!m_useImGuiPrimitives) {
         for (const auto& shape : m_shapes) {
             shape->draw(this);
@@ -1224,12 +909,12 @@ void CMyTest::update()
     if (m_selectedShape) {
         auto pts = m_selectedShape->getControlPoints();
 
-        // Dibujar puntos de control circulares unificados
+        // Dibujar puntos de control circulares
         for (size_t i = 0; i < pts.size(); ++i) {
             int px = pts[i].first;
             int py = pts[i].second;
             RGBA col = (m_selectedHandleIndex == (int)i) ? m_selectedControlPointColor : m_controlPointColor;
-            drawEllipseFilled(px, py, m_controlPointRadius, m_controlPointRadius, col, col, 1);
+            Ellipse::drawEllipseFilled(this, px, py, m_controlPointRadius, m_controlPointRadius, col, col, 1);
         }
 
         // Si se seleccionó la figura completa, dibujar un rectángulo de selección
@@ -1244,20 +929,20 @@ void CMyTest::update()
                     ymax = std::max(ymax, p.second);
                 }
                 m_selectionHandleColor = m_controlPointColor;
-                drawRectangleOutline(xmin - 8, ymin - 8, xmax + 8, ymax + 8, m_selectionHandleColor, 1);
+                Rectangle::drawRectangleOutline(this, xmin - 8, ymin - 8, xmax + 8, ymax + 8, m_selectionHandleColor, 1);
             }
         }
     }
 
-    // Si estamos creando una Bézier temporal, dibujar polígono/preview
+    // dibujar polígono/preview
     if (m_drawMode == 4 && m_tempControlPoints.size() > 0) {
         for (size_t i = 0; i < m_tempControlPoints.size(); ++i) {
             const auto& p = m_tempControlPoints[i];
             if (i < m_tempControlPoints.size() - 1) {
                 const auto& pNext = m_tempControlPoints[i + 1];
-                drawLine(p.first, p.second, pNext.first, pNext.second, m_controlPolygonColor, 1);
+                Line::drawLineBresenham(this, p.first, p.second, pNext.first, pNext.second, m_controlPolygonColor, 1);
             }
-            drawEllipseFilled(p.first, p.second, m_controlPointRadius, m_controlPointRadius, m_controlPointColor, m_controlPointColor, 1);
+            Ellipse::drawEllipseFilled(this, p.first, p.second, m_controlPointRadius, m_controlPointRadius, m_controlPointColor, m_controlPointColor, 1);
         }
 
         if (!m_tempControlPoints.empty()) {
@@ -1267,51 +952,51 @@ void CMyTest::update()
             int cy = height - 1 - static_cast<int>(ypos_d);
 
             const auto& lastPoint = m_tempControlPoints.back();
-            drawLine(lastPoint.first, lastPoint.second, cx, cy, m_controlPolygonColor, 1);
+            Line::drawLineBresenham(this, lastPoint.first, lastPoint.second, cx, cy, m_controlPolygonColor, 1);
 
-            drawEllipseFilled(cx, cy, m_controlPointRadius / 2, m_controlPointRadius / 2, m_controlPolygonColor, m_controlPolygonColor, 1);
+            Ellipse::drawEllipseFilled(this, cx, cy, m_controlPointRadius / 2, m_controlPointRadius / 2, m_controlPolygonColor, m_controlPolygonColor, 1);
         }
 
         if (m_tempControlPoints.size() >= 2) {
             int segments = 100;
             this->m_drawnPixels.clear();
-            std::pair<int, int> p0 = deCasteljauTemp(m_tempControlPoints, 0.0f);
+            std::pair<int, int> p0 = BezierCurve::deCasteljau(m_tempControlPoints, 0.0f);
 
             for (int i = 1; i <= segments; ++i) {
                 float t = (float)i / segments;
-                std::pair<int, int> p1 = deCasteljauTemp(m_tempControlPoints, t);
-                drawLineBresenham(p0.first, p0.second, p1.first, p1.second, m_borderColor, m_lineThickness, false);
+                std::pair<int, int> p1 = BezierCurve::deCasteljau(m_tempControlPoints, t);
+                Line::drawLineBresenham(this, p0.first, p0.second, p1.first, p1.second, m_borderColor, m_lineThickness, false);
                 p0 = p1;
             }
         }
     }
 
-    // Dibujar figura en creación (linea, elipse, rectángulo, triángulo en progreso)
+    // Dibujar figura en creación
     if (m_x0 >= 0 && m_y0 >= 0 && m_x1 >= 0 && m_y1 >= 0) {
         if (m_drawMode == 0) {
-            drawLine(m_x0, m_y0, m_x1, m_y1, m_borderColor, m_lineThickness);
+            Line::drawLineBresenham(this, m_x0, m_y0, m_x1, m_y1, m_borderColor, m_lineThickness);
         }
         else if (m_drawMode == 1) {
             int a = std::abs(m_x1 - m_x0);
             int b = std::abs(m_y1 - m_y0);
             if (m_useFilledShapes) {
-                drawEllipseFilled(m_x0, m_y0, a, b, m_fillColor, m_borderColor, m_lineThickness);
+                Ellipse::drawEllipseFilled(this, m_x0, m_y0, a, b, m_fillColor, m_borderColor, m_lineThickness);
             }
             else {
-                drawEllipseOutline(m_x0, m_y0, a, b, m_borderColor, m_lineThickness);
+                Ellipse::drawEllipseOutline(this, m_x0, m_y0, a, b, m_borderColor, m_lineThickness);
             }
         }
         else if (m_drawMode == 2) {
             if (m_useFilledShapes) {
-                drawRectangleFilled(m_x0, m_y0, m_x1, m_y1, m_fillColor, m_borderColor, m_lineThickness);
+                Rectangle::drawRectangleFilled(this, m_x0, m_y0, m_x1, m_y1, m_fillColor, m_borderColor, m_lineThickness);
             }
             else {
-                drawRectangleOutline(m_x0, m_y0, m_x1, m_y1, m_borderColor, m_lineThickness);
+                Rectangle::drawRectangleOutline(this, m_x0, m_y0, m_x1, m_y1, m_borderColor, m_lineThickness);
             }
         }
         else if (m_drawMode == 3) {
             if (m_triClicks == 1) {
-                drawLine(m_triTempX[0], m_triTempY[0], m_x1, m_y1, m_borderColor, m_lineThickness);
+                Line::drawLineBresenham(this, m_triTempX[0], m_triTempY[0], m_x1, m_y1, m_borderColor, m_lineThickness);
             }
         }
     }
@@ -1322,14 +1007,14 @@ void CMyTest::update()
             int cx = static_cast<int>(xpos_d);
             int cy = height - 1 - static_cast<int>(ypos_d);
             if (m_triClicks == 1) {
-                drawLine(m_triTempX[0], m_triTempY[0], cx, cy, m_borderColor, m_lineThickness);
+                Line::drawLineBresenham(this, m_triTempX[0], m_triTempY[0], cx, cy, m_borderColor, m_lineThickness);
             }
             else if (m_triClicks == 2) {
                 if (m_useFilledShapes) {
-                    drawTriangleFilled(m_triTempX[0], m_triTempY[0], m_triTempX[1], m_triTempY[1], cx, cy, m_fillColor, m_borderColor, m_lineThickness);
+                    Triangle::drawTriangleFilled(this, m_triTempX[0], m_triTempY[0], m_triTempX[1], m_triTempY[1], cx, cy, m_fillColor, m_borderColor, m_lineThickness);
                 }
                 else {
-                    drawTriangleOutline(m_triTempX[0], m_triTempY[0], m_triTempX[1], m_triTempY[1], cx, cy, m_borderColor, m_lineThickness);
+                    Triangle::drawTriangleOutline(this, m_triTempX[0], m_triTempY[0], m_triTempX[1], m_triTempY[1], cx, cy, m_borderColor, m_lineThickness);
                 }
             }
         }
@@ -1796,11 +1481,11 @@ void CMyTest::drawInterface()
     }
 
     if (ImGui::BeginPopup("Save Shapes")) {
-        static char filename[128] = "drawing";
+        static char filename[128] = "shapes";
         static int saveFormat = 0; // 0=JSON, 1=PNG, 2=JPG, 3=BMP
         static int jpgQuality = 90;
 
-        ImGui::Text("Save your drawing in /proy_OA/:");
+        ImGui::Text("Save your drawing in /base_code1:");
         ImGui::Separator();
 
         ImGui::InputText("Filename", filename, IM_ARRAYSIZE(filename));
@@ -2294,10 +1979,10 @@ void CMyTest::drawInterface()
             }
             else if (auto bz = dynamic_cast<BezierCurve*>(s)) {
                 int segments = 100;
-                ImVec2 prev = toScreen(deCasteljau(bz->controlPoints, 0.0f).first, deCasteljau(bz->controlPoints, 0.0f).second);
+                ImVec2 prev = toScreen(BezierCurve::deCasteljau(bz->controlPoints, 0.0f).first, BezierCurve::deCasteljau(bz->controlPoints, 0.0f).second);
                 for (int i = 1; i <= segments; ++i) {
                     float t = (float)i / (float)segments;
-                    auto p = deCasteljau(bz->controlPoints, t);
+                    auto p = BezierCurve::deCasteljau(bz->controlPoints, t);
                     ImVec2 cur = toScreen(p.first, p.second);
                     draw_list->AddLine(prev, cur, IM_COL32(bz->borderColor.r, bz->borderColor.g, bz->borderColor.b, bz->borderColor.a), (float)bz->thickness);
                     prev = cur;
@@ -2361,11 +2046,11 @@ void CMyTest::drawInterface()
 
             if (m_tempControlPoints.size() >= 2) {
                 int segments = 100;
-                auto p0 = deCasteljauTemp(m_tempControlPoints, 0.0f);
+                auto p0 = BezierCurve::deCasteljau(m_tempControlPoints, 0.0f);
                 ImVec2 prev = toScreen(p0.first, p0.second);
                 for (int i = 1; i <= segments; ++i) {
                     float t = (float)i / (float)segments;
-                    auto p = deCasteljauTemp(m_tempControlPoints, t);
+                    auto p = BezierCurve::deCasteljau(m_tempControlPoints, t);
                     ImVec2 curp = toScreen(p.first, p.second);
                     draw_list->AddLine(prev, curp, IM_COL32(m_borderColor.r, m_borderColor.g, m_borderColor.b, m_borderColor.a), (float)m_lineThickness);
                     prev = curp;

@@ -1,6 +1,30 @@
 #include "BezierCurve.h"
+#include "Line.h"
 #include "CMyTest.h"
 #include <cmath>
+
+// Algoritmo de De Casteljau para evaluar la curva de Bézier en el parámetro t
+std::pair<int, int> BezierCurve::deCasteljau(const std::vector<std::pair<int, int>>& points, float t)
+{
+    if (points.empty()) return { 0, 0 };
+
+    std::vector<std::pair<float, float>> temp(points.size());
+    for (size_t i = 0; i < points.size(); ++i) {
+        temp[i] = { static_cast<float>(points[i].first), static_cast<float>(points[i].second) };
+    }
+
+    int n = temp.size() - 1;
+    for (int k = 1; k <= n; ++k) {
+        for (int i = 0; i <= n - k; ++i) {
+            temp[i].first = (1.0f - t) * temp[i].first + t * temp[i + 1].first;
+            temp[i].second = (1.0f - t) * temp[i].second + t * temp[i + 1].second;
+        }
+    }
+
+    int rx = static_cast<int>(std::lround(temp[0].first));
+    int ry = static_cast<int>(std::lround(temp[0].second));
+    return { rx, ry };
+}
 
 void BezierCurve::elevateDegree()
 {
@@ -76,11 +100,11 @@ void BezierCurve::draw(CMyTest* renderer)
     // evitar que setThickPixel pinte píxeles duplicados dentro de la misma curva.
     renderer->m_drawnPixels.clear();
 
-    std::pair<int, int> p0 = CMyTest::deCasteljau(controlPoints, 0.0f);
+    std::pair<int, int> p0 = BezierCurve::deCasteljau(controlPoints, 0.0f);
     for (int i = 1; i <= segments; ++i) {
         float t = (float)i / segments;
-        std::pair<int, int> p1 = CMyTest::deCasteljau(controlPoints, t);
-        renderer->drawLineBresenham(p0.first, p0.second, p1.first, p1.second, borderColor, thickness, false);
+        std::pair<int, int> p1 = BezierCurve::deCasteljau(controlPoints, t);
+        Line::drawLineBresenham(renderer, p0.first, p0.second, p1.first, p1.second, borderColor, thickness, false);
         p0 = p1;
     }
 
@@ -90,8 +114,9 @@ void BezierCurve::draw(CMyTest* renderer)
         for (size_t i = 0; i < controlPoints.size() - 1; ++i) {
             const auto& pA = controlPoints[i];
             const auto& pB = controlPoints[i + 1];
-            renderer->drawLine(pA.first, pA.second, pB.first, pB.second,
-                renderer->getControlPolygonColor(), 1);
+            // Usa el color de polígono de control de renderer
+            // Asegúrate de que m_controlPolygonColor sea accesible desde aquí
+            Line::drawLineBresenham(renderer, pA.first, pA.second, pB.first, pB.second, renderer->m_controlPolygonColor, 1);
         }
     }
 }
@@ -117,12 +142,12 @@ bool BezierCurve::containsPoint(int x, int y)
 {
     // Test de distancia a la curva muestreada
     int segments = 80;
-    std::pair<int, int> prev = CMyTest::deCasteljau(controlPoints, 0.0f);
+    std::pair<int, int> prev = BezierCurve::deCasteljau(controlPoints, 0.0f);
     const int TOL = 10;
 
     for (int i = 1; i <= segments; ++i) {
         float t = (float)i / segments;
-        std::pair<int, int> cur = CMyTest::deCasteljau(controlPoints, t);
+        std::pair<int, int> cur = BezierCurve::deCasteljau(controlPoints, t);
 
         // Distancia punto a segmento prev-cur
         auto dist2 = [](int x0, int y0, int x1, int y1, int x, int y) -> double {

@@ -33,7 +33,6 @@ private:
     // Colores para los puntos de control y selección
     RGBA m_controlPointColor = { 255, 119, 0, 255 };
     RGBA m_selectedControlPointColor = { 0, 119, 255, 255 };
-    RGBA m_controlPolygonColor = { 136, 136, 136, 255 };
     RGBA m_selectionHandleColor = m_controlPointColor;
 
     // Colores de fondo
@@ -98,10 +97,8 @@ private:
     void applyAction(UndoAction& action, bool isUndo);
     void recordAddShape(size_t index);
     void recordDeleteShape(size_t index);
-    void recordMoveShape(Shape* shape, const std::vector<std::pair<int, int>>& oldPts,
-        const std::vector<std::pair<int, int>>& newPts);
-    void recordChangeColor(Shape* shape, RGBA oldBorder, RGBA newBorder,
-        RGBA oldFill, RGBA newFill, bool border, bool fill);
+    void recordMoveShape(Shape* shape, const std::vector<std::pair<int, int>>& oldPts, const std::vector<std::pair<int, int>>& newPts);
+    void recordChangeColor(Shape* shape, RGBA oldBorder, RGBA newBorder, RGBA oldFill, RGBA newFill, bool border, bool fill);
     void recordChangeBackground(RGBA oldColor, RGBA newColor);
     void recordChangeLayer(size_t from, size_t to);
     void performUndo();
@@ -119,27 +116,15 @@ private:
     void loadFromJSON(const std::string& filename);
 
 public:
-    // Conjunto para evitar dibujar el mismo píxel dos veces
+    RGBA m_controlPolygonColor = { 136, 136, 136, 255 };
+    // Conjunto para evitar dibujar el mismo píxel dos veces (público para acceso desde shapes)
     std::set<std::pair<int, int>> m_drawnPixels;
 
     CMyTest();
     ~CMyTest();
 
-    // Métodos públicos de dibujo
+    // Métodos públicos básicos que las shapes necesitan
     void setThickPixel(int x, int y, RGBA color, int thickness);
-    void drawLineBresenham(int x0, int y0, int x1, int y1, RGBA color, int thickness, bool clear = true);
-    void drawLine(int x0, int y0, int x1, int y1, RGBA color, int thickness = 1);
-    void ellipsePoints4(long long cx, long long cy, long long x, long long y, RGBA color, int thickness);
-    void drawEllipseOutline(int cx, int cy, int a, int b, RGBA color, int thickness = 1);
-    void drawRectangleOutline(int x0, int y0, int x1, int y1, RGBA color, int thickness);
-    void drawTriangleOutline(int x0, int y0, int x1, int y1, int x2, int y2, RGBA color, int thickness);
-    void drawHorizontalLine(int x0, int x1, int y, RGBA color);
-    void drawTriangleFilled(int x0, int y0, int x1, int y1, int x2, int y2, RGBA fillColor, RGBA borderColor, int thickness);
-    void drawEllipseFilled(int cx, int cy, int a, int b, RGBA fillColor, RGBA borderColor, int thickness);
-    void drawRectangleFilled(int x0, int y0, int x1, int y1, RGBA fillColor, RGBA borderColor, int thickness);
-
-    static std::pair<int, int> deCasteljau(const std::vector<std::pair<int, int>>& points, float t);
-    std::pair<int, int> deCasteljauTemp(const std::vector<std::pair<int, int>>& points, float t);
 
     // Métodos de guardado
     void saveToPNG(const std::string& filename);

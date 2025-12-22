@@ -1,15 +1,85 @@
 #include "Rectangle.h"
 #include "CMyTest.h"
+#include "Line.h"
 #include <algorithm>
 #include <cmath>
+
+void Rectangle::drawHorizontalLine(CMyTest* renderer, int x0, int x1, int y, RGBA color)
+{
+    if (x0 > x1) std::swap(x0, x1);
+    for (int x = x0; x <= x1; ++x) {
+        renderer->setPixel(x, y, color);
+    }
+}
+
+void Rectangle::drawRectangleOutline(CMyTest* renderer, int x0, int y0, int x1, int y1, RGBA color, int thickness)
+{
+    int xmin = std::min(x0, x1);
+    int xmax = std::max(x0, x1);
+    int ymin = std::min(y0, y1);
+    int ymax = std::max(y0, y1);
+
+    // Limpiar el conjunto de píxeles dibujados
+    renderer->m_drawnPixels.clear();
+
+    // Función para dibujar una línea evitando duplicar extremos
+    auto drawLineProtected = [&](int sx, int sy, int ex, int ey, bool isLast = false) {
+        // Marcar el inicio como dibujado
+        renderer->m_drawnPixels.insert({ sx, sy });
+
+        // Dibujar la línea
+        Line::drawLineBresenham(renderer, sx, sy, ex, ey, color, thickness, false);
+
+        // Si no es la última línea, eliminar el extremo final
+        if (!isLast) {
+            auto it = renderer->m_drawnPixels.find({ ex, ey });
+            if (it != renderer->m_drawnPixels.end()) {
+                renderer->m_drawnPixels.erase(it);
+            }
+        }
+        };
+
+    // Dibujar los 4 lados
+    drawLineProtected(xmin, ymin, xmax, ymin); // Lado superior
+    drawLineProtected(xmax, ymin, xmax, ymax); // Lado derecho
+    drawLineProtected(xmax, ymax, xmin, ymax); // Lado inferior
+    drawLineProtected(xmin, ymax, xmin, ymin, true); // Lado izquierdo (último)
+
+    // Dibujar los vértices 
+    for (const auto& p : renderer->m_drawnPixels) {
+        renderer->setPixel(p.first, p.second, color);
+    }
+}
+
+void Rectangle::drawRectangleFilled(CMyTest* renderer, int x0, int y0, int x1, int y1, RGBA fillColor, RGBA borderColor, int thickness)
+{
+    int xmin = std::min(x0, x1);
+    int xmax = std::max(x0, x1);
+    int ymin = std::min(y0, y1);
+    int ymax = std::max(y0, y1);
+
+    drawRectangleOutline(renderer, xmin, ymin, xmax, ymax, borderColor, thickness);
+
+    int innerMargin = (thickness - 1) / 2;
+    int innerXmin = xmin + innerMargin + 1;
+    int innerXmax = xmax - innerMargin - 1;
+    int innerYmin = ymin + innerMargin + 1;
+    int innerYmax = ymax - innerMargin - 1;
+
+    if (innerXmin <= innerXmax && innerYmin <= innerYmax) {
+        for (int y = innerYmin; y <= innerYmax; ++y) {
+            drawHorizontalLine(renderer, innerXmin, innerXmax, y, fillColor);
+        }
+    }
+}
 
 void Rectangle::draw(CMyTest* renderer)
 {
     if (filled) {
-        renderer->drawRectangleFilled(xmin, ymin, xmax, ymax, fillColor, borderColor, thickness);
+        drawRectangleFilled(renderer, xmin, ymin, xmax, ymax, fillColor, borderColor, thickness);
     }
     else {
-        renderer->drawRectangleOutline(xmin, ymin, xmax, ymax, borderColor, thickness);
+        drawRectangleOutline(renderer, xmin, ymin, xmax, ymax, borderColor, thickness);
     }
 }
 

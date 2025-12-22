@@ -1,4 +1,4 @@
-﻿// Proyecto #1: Despliegue y la manipulación de primitivas 2D
+﻿// Proyecto #1: Despliegue y manipulación de primitivas 2D
 // Nombre: Oscary Arocha
 // C.I: 30.697.617
 // La funciones principales están en CMyTest.cpp

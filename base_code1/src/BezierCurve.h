@@ -20,6 +20,9 @@ public:
     void setControlPoint(int idx, int x, int y) override;
     void moveBy(int dx, int dy) override;
     bool containsPoint(int x, int y) override;
+
+    // Algoritmo de De Casteljau para evaluar la curva de Bézier
+    static std::pair<int, int> deCasteljau(const std::vector<std::pair<int, int>>& points, float t);
 };
 
 #endif // BEZIERCURVE_H
