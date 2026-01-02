@@ -1,4 +1,5 @@
 #include "3DViewer.h"
+#include "tinyfiledialogs.h"
 #include <iostream>
 
 C3DViewer::C3DViewer()
@@ -10,9 +11,7 @@ C3DViewer::~C3DViewer()
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-    
-    if (m_vbo) glDeleteBuffers(1, &m_vbo);
-    if (m_vao) glDeleteVertexArrays(1, &m_vao);
+
     if (m_shaderProgram) glDeleteProgram(m_shaderProgram);
     if (m_window) glfwDestroyWindow(m_window);
     glfwTerminate();
@@ -20,15 +19,15 @@ C3DViewer::~C3DViewer()
 
 bool C3DViewer::setup()
 {
-    if (!glfwInit()) 
+    if (!glfwInit())
         return false;
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    m_window = glfwCreateWindow(width, height, "C3DViewer Window: Hello Triangle", NULL, NULL);
-    if (!m_window) 
+    m_window = glfwCreateWindow(width, height, "OBJ Viewer - OpenGL", NULL, NULL);
+    if (!m_window)
     {
         glfwTerminate();
         return false;
@@ -36,62 +35,61 @@ bool C3DViewer::setup()
 
     glfwMakeContextCurrent(m_window);
 
-    // Inicializar glad
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) 
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
         glfwDestroyWindow(m_window);
         glfwTerminate();
         return false;
     }
-    
+
+    // Habilitar depth testing
+    glEnable(GL_DEPTH_TEST);
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Opcional
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui::StyleColorsDark();
-
     ImGui_ImplGlfw_InitForOpenGL(m_window, true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
-    
+
     glfwSetWindowUserPointer(m_window, this);
     glfwSetFramebufferSizeCallback(m_window, [](GLFWwindow* window, int w, int h) {
         auto ptr = reinterpret_cast<C3DViewer*>(glfwGetWindowUserPointer(window));
-        if (ptr) 
+        if (ptr)
             ptr->resize(w, h);
-    });
+        });
 
-    // Setup shader
     if (!setupShader()) return false;
-
-    // Setup VAO y VBO para el triángulo
-    setupTriangle();
 
     glViewport(0, 0, width, height);
 
-    glfwSetWindowUserPointer(m_window, this);
     glfwSetKeyCallback(m_window, keyCallbackStatic);
     glfwSetMouseButtonCallback(m_window, mouseButtonCallbackStatic);
     glfwSetCursorPosCallback(m_window, cursorPosCallbackStatic);
+
+    // Inicializar matrices
+    m_projectionMatrix = glm::perspective(glm::radians(45.0f),
+        (float)width / (float)height,
+        0.1f, 100.0f);
+    m_viewMatrix = glm::lookAt(m_cameraPos, m_cameraTarget, m_cameraUp);
+    m_modelMatrix = glm::mat4(1.0f);
 
     return true;
 }
 
 void C3DViewer::update()
 {
-
 }
 
-void C3DViewer::mainLoop() 
+void C3DViewer::mainLoop()
 {
-    while (!glfwWindowShouldClose(m_window)) 
+    while (!glfwWindowShouldClose(m_window))
     {
         glfwPollEvents();
 
-        // color de borrado
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-
-        // borrando búferes
+        glClearColor(0.15f, 0.15f, 0.2f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         render();
@@ -100,20 +98,18 @@ void C3DViewer::mainLoop()
     }
 }
 
-void C3DViewer::onKey(int key, int scancode, int action, int mods) 
+void C3DViewer::onKey(int key, int scancode, int action, int mods)
 {
-
     if (action == GLFW_PRESS)
     {
-        std::cout << "Key " << key << " pressed\n";
         if (key == GLFW_KEY_ESCAPE)
             glfwSetWindowShouldClose(m_window, GLFW_TRUE);
+        else if (key == GLFW_KEY_O)
+            loadOBJFile();
     }
-    else if (action == GLFW_RELEASE)
-        std::cout << "Key " << key << " released\n";
 }
 
-void C3DViewer::onMouseButton(int button, int action, int mods) 
+void C3DViewer::onMouseButton(int button, int action, int mods)
 {
     if (button >= 0 && button < 3)
     {
@@ -122,77 +118,144 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
         if (action == GLFW_PRESS)
         {
             mouseButtonsDown[button] = true;
-            // Obtener posición actual del cursor
-            std::cout << "Mouse button " << button << " pressed at position (" << xpos << ", " << ypos << ")\n";
         }
         else if (action == GLFW_RELEASE)
         {
-
             mouseButtonsDown[button] = false;
-            std::cout << "Mouse button " << button << " released at position (" << xpos << ", " << ypos << ")\n";
         }
     }
 }
 
-void C3DViewer::onCursorPos(double xpos, double ypos) 
+void C3DViewer::onCursorPos(double xpos, double ypos)
 {
-    if (mouseButtonsDown[0] || mouseButtonsDown[1] || mouseButtonsDown[2]) 
+    // Aquí puedes implementar rotación con mouse
+}
+
+void C3DViewer::loadOBJFile()
+{
+    const char* filterPatterns[1] = { "*.obj" };
+    const char* filePath = tinyfd_openFileDialog(
+        "Seleccionar archivo OBJ",
+        "",
+        1,
+        filterPatterns,
+        "Archivos OBJ (*.obj)",
+        0
+    );
+
+    if (filePath)
     {
-        std::cout << "Mouse move at (" << xpos << ", " << ypos << ")\n";
+        std::cout << "Cargando: " << filePath << std::endl;
+        if (m_objLoader.load(filePath))
+        {
+            m_objLoaded = true;
+            std::cout << "OBJ cargado exitosamente" << std::endl;
+            std::cout << "Centro: (" << m_objLoader.getCenter().x << ", "
+                << m_objLoader.getCenter().y << ", "
+                << m_objLoader.getCenter().z << ")" << std::endl;
+            std::cout << "Factor de escala: " << m_objLoader.getScaleFactor().x << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error al cargar el archivo OBJ" << std::endl;
+        }
     }
 }
 
-void C3DViewer::render() 
+void C3DViewer::renderOBJ()
+{
+    if (!m_objLoaded) return;
+
+    glUseProgram(m_shaderProgram);
+
+    // Configurar matrices
+    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
+    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor());
+    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
+
+    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f));
+    m_modelMatrix = objectTransform * normalizationMatrix;
+
+    // Enviar uniforms
+    GLint modelLoc = glGetUniformLocation(m_shaderProgram, "model");
+    GLint viewLoc = glGetUniformLocation(m_shaderProgram, "view");
+    GLint projLoc = glGetUniformLocation(m_shaderProgram, "projection");
+
+    glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
+    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
+    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
+
+    // Lighting
+    glm::vec3 lightPos(2.0f, 2.0f, 2.0f);
+    glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
+
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightPos"), 1, glm::value_ptr(lightPos));
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "viewPos"), 1, glm::value_ptr(m_cameraPos));
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightColor"), 1, glm::value_ptr(lightColor));
+
+    // Renderizar cada submesh
+    for (const auto& subMesh : m_objLoader.getSubMeshes())
+    {
+        glUniform3fv(glGetUniformLocation(m_shaderProgram, "objectColor"),
+            1, glm::value_ptr(subMesh.material.Kd));
+
+        glBindVertexArray(subMesh.VAO);
+        glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
+        glBindVertexArray(0);
+    }
+}
+
+void C3DViewer::render()
 {
     update();
 
-    glUseProgram(m_shaderProgram);
-    glBindVertexArray(m_vao);
-
-    // dibujo 2 triángulos por ahora...
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    if (m_objLoaded)
+    {
+        renderOBJ();
+    }
 
     drawInterface();
 }
 
 void C3DViewer::drawInterface()
 {
-    double currentTime = glfwGetTime();
-    double deltaTime = currentTime - lastTime;
-
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // Aquí colocas el código ImGui para el slider
-    ImGui::SetNextWindowSize(ImVec2(300, 100), ImGuiCond_Once); // Tamaño inicial 400x300, solo al crear ventana
+    ImGui::SetNextWindowSize(ImVec2(300, 150), ImGuiCond_Once);
     ImGui::Begin("Control Panel");
-    static int anyDummyValue = 50;
-    if (ImGui::SliderInt("slider-demo", &anyDummyValue, 1, 100)) 
+
+    ImGui::Text("Presiona 'O' para cargar OBJ");
+
+    if (ImGui::Button("Abrir archivo OBJ"))
     {
-        // valor actualizado automáticamente en anyDummyValue
+        loadOBJFile();
     }
+
+    if (m_objLoaded)
+    {
+        ImGui::Separator();
+        ImGui::Text("OBJ Cargado");
+        ImGui::Text("Submeshes: %zu", m_objLoader.getSubMeshes().size());
+    }
+
     ImGui::End();
     ImGui::Render();
-    // Rendirizar ImGui con OpenGL
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-    if (deltaTime >= 1.0) 
-    {
-        lastTime = currentTime;
-    }
 }
 
-void C3DViewer::resize(int new_width, int new_height) 
+void C3DViewer::resize(int new_width, int new_height)
 {
     width = new_width;
     height = new_height;
-
-    // actualizamos el viewport cada vez que haya un resize
     glViewport(0, 0, width, height);
+    m_projectionMatrix = glm::perspective(glm::radians(45.0f),
+        (float)width / (float)height,
+        0.1f, 100.0f);
 }
 
-bool C3DViewer::setupShader() 
+bool C3DViewer::setupShader()
 {
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertexShader, 1, &vertexShaderSrc, nullptr);
@@ -215,21 +278,21 @@ bool C3DViewer::setupShader()
     return true;
 }
 
-bool C3DViewer::checkCompileErrors(GLuint shader, const char* type) 
+bool C3DViewer::checkCompileErrors(GLuint shader, const char* type)
 {
     GLint success;
     GLchar infoLog[1024];
-    if (strcmp(type, "PROGRAM") != 0) 
+    if (strcmp(type, "PROGRAM") != 0)
     {
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-        if (!success) 
+        if (!success)
         {
             glGetShaderInfoLog(shader, 1024, NULL, infoLog);
             fprintf(stderr, "ERROR::SHADER_COMPILATION_ERROR of type: %s\n%s\n", type, infoLog);
             return false;
         }
     }
-    else 
+    else
     {
         glGetProgramiv(shader, GL_LINK_STATUS, &success);
         if (!success) {
@@ -241,40 +304,15 @@ bool C3DViewer::checkCompileErrors(GLuint shader, const char* type)
     return true;
 }
 
-void C3DViewer::setupTriangle()
-{
-    float vertices[] = 
-    {
-        // x      y      z     r     g     b 
-        -1.0f,  1.0f,  0.0f, 1.0f, 0.0f, 0.0f, 
-         1.0f,  1.0f,  0.0f, 0.0f, 1.0f, 0.0f, 
-         1.0f, -1.0f,  0.0f, 0.0f, 0.0f, 1.0f
-    };
-
-    glGenVertexArrays(1, &m_vao);
-    glGenBuffers(1, &m_vbo);
-
-    glBindVertexArray(m_vao);
-
-    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-}
-
-void C3DViewer::keyCallbackStatic(GLFWwindow* window, int key, int scancode, int action, int mods) 
+void C3DViewer::keyCallbackStatic(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
     ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
     C3DViewer* self = (C3DViewer*)glfwGetWindowUserPointer(window);
-    if (self) 
+    if (self)
         self->onKey(key, scancode, action, mods);
 }
 
-void C3DViewer::mouseButtonCallbackStatic(GLFWwindow* window, int button, int action, int mods) 
+void C3DViewer::mouseButtonCallbackStatic(GLFWwindow* window, int button, int action, int mods)
 {
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
     C3DViewer* self = (C3DViewer*)glfwGetWindowUserPointer(window);
@@ -282,11 +320,10 @@ void C3DViewer::mouseButtonCallbackStatic(GLFWwindow* window, int button, int ac
         self->onMouseButton(button, action, mods);
 }
 
-void C3DViewer::cursorPosCallbackStatic(GLFWwindow* window, double xpos, double ypos) 
+void C3DViewer::cursorPosCallbackStatic(GLFWwindow* window, double xpos, double ypos)
 {
     ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
     C3DViewer* self = (C3DViewer*)glfwGetWindowUserPointer(window);
-    if (self) 
+    if (self)
         self->onCursorPos(xpos, ypos);
 }
-
