@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <limits>
 #include <glad.h>
+#include <unordered_map>
 
 OBJLoader::OBJLoader()
     : m_center(0.0f), m_scaleFactor(1.0f),
@@ -98,6 +99,9 @@ bool OBJLoader::load(const std::string& objPath) {
     std::string currentMaterialName;
     bool hasCurrentSubMesh = false;
 
+    std::unordered_map<std::string, unsigned int> vertexIndexMap;
+    vertexIndexMap.clear();
+
     std::string line;
     while (std::getline(file, line)) {
         if (line.empty() || line[0] == '#') continue;
@@ -141,10 +145,11 @@ bool OBJLoader::load(const std::string& objPath) {
 
             if (m_materials.find(currentMaterialName) != m_materials.end()) {
                 currentSubMesh.material = m_materials[currentMaterialName];
+				std::cout << "Material '" << currentMaterialName << "' asignado al sub-mesh" << std::endl;
             }
             else {
                 currentSubMesh.material = Material();
-                std::cerr << "Warning: Material '" << currentMaterialName << "' no encontrado, usando color gris por defecto" << std::endl;
+                std::cerr << "Material '" << currentMaterialName << "' no encontrado, usando color gris por defecto" << std::endl;
             }
 
             hasCurrentSubMesh = true;
@@ -162,42 +167,60 @@ bool OBJLoader::load(const std::string& objPath) {
                 faceVertices.push_back(vertex);
             }
 
-            // Triangular la cara (soporta triángulos y quads)
+            // Triangular la cara (triángulos y quads)
             for (size_t i = 1; i + 1 < faceVertices.size(); ++i) {
+                unsigned int triangleIndices[3] = { 0, static_cast<unsigned int>(i), static_cast<unsigned int>(i + 1) };
+
                 for (size_t j = 0; j < 3; ++j) {
-                    size_t idx = (j == 0) ? 0 : i + j - 1;
-                    std::string& fv = faceVertices[idx];
+                    std::string& fv = faceVertices[triangleIndices[j]];
 
-                    std::istringstream faceStream(fv);
-                    std::string indexStr;
-                    int indices[3] = { 0, 0, 0 }; // v, vt, vn
-                    int count = 0;
+                    // Buscar si ya existe este vértice
+                    auto it = vertexIndexMap.find(fv);
+                    if (it != vertexIndexMap.end()) {
+                        // Vértice ya existe, usar índice existente
+                        currentSubMesh.indices.push_back(it->second);
+                    }
+                    else {
+                        // Nuevo vértice, procesar índices
+                        std::istringstream faceStream(fv);
+                        std::string indexStr;
+                        int indices[3] = { 0, 0, 0 };
+                        int count = 0;
 
-                    while (std::getline(faceStream, indexStr, '/') && count < 3) {
-                        if (!indexStr.empty()) {
-                            indices[count] = std::stoi(indexStr);
+                        while (std::getline(faceStream, indexStr, '/') && count < 3) {
+                            if (!indexStr.empty()) {
+                                indices[count] = std::stoi(indexStr);
+                            }
+                            count++;
                         }
-                        count++;
-                    }
 
-                    int vIdx = indices[0] - 1;
-                    int vtIdx = indices[1] - 1;
-                    int vnIdx = indices[2] - 1;
+                        int vIdx = indices[0] - 1;
+                        int vtIdx = indices[1] - 1;
+                        int vnIdx = indices[2] - 1;
 
-                    if (vIdx >= 0 && vIdx < (int)tempVertices.size()) {
-                        currentSubMesh.vertices.push_back(tempVertices[vIdx]);
-                        currentSubMesh.indices.push_back(currentSubMesh.vertices.size() - 1);
-                    }
+                        if (vIdx >= 0 && vIdx < (int)tempVertices.size()) {
+                            currentSubMesh.vertices.push_back(tempVertices[vIdx]);
+                        }
 
-                    if (vtIdx >= 0 && vtIdx < (int)tempTexCoords.size()) {
-                        currentSubMesh.texCoords.push_back(tempTexCoords[vtIdx]);
-                    }
+                        if (vtIdx >= 0 && vtIdx < (int)tempTexCoords.size()) {
+                            currentSubMesh.texCoords.push_back(tempTexCoords[vtIdx]);
+                        }
+                        else {
+                            currentSubMesh.texCoords.push_back(glm::vec2(0.0f));
+                        }
 
-                    if (vnIdx >= 0 && vnIdx < (int)tempNormals.size()) {
-                        currentSubMesh.normals.push_back(tempNormals[vnIdx]);
-                    }
-                    else if (!currentSubMesh.vertices.empty()) {
-                        currentSubMesh.normals.push_back(glm::vec3(0.0f, 1.0f, 0.0f));
+                        if (vnIdx >= 0 && vnIdx < (int)tempNormals.size()) {
+                            currentSubMesh.normals.push_back(tempNormals[vnIdx]);
+                        }
+                        else {
+                            // Calcular normal por defecto
+                            currentSubMesh.normals.push_back(glm::vec3(0.0f, 1.0f, 0.0f));
+                        }
+
+                        // Añadir nuevo índice y mapear
+                        unsigned int newIndex = currentSubMesh.vertices.size() - 1;
+                        currentSubMesh.indices.push_back(newIndex);
+                        vertexIndexMap[fv] = newIndex;
                     }
                 }
             }
@@ -215,8 +238,18 @@ bool OBJLoader::load(const std::string& objPath) {
         return false;
     }
 
+    // Añadir depuración
+    std::cout << "INFO: OBJ cargado con " << m_subMeshes.size() << " sub-mallados" << std::endl;
+    for (size_t i = 0; i < m_subMeshes.size(); ++i) {
+        std::cout << "  SubMesh " << i << ": "
+            << m_subMeshes[i].vertices.size() << " vertices, "
+            << m_subMeshes[i].indices.size() << " indices, "
+            << m_subMeshes[i].normals.size() << " normals, "
+            << m_subMeshes[i].texCoords.size() << " texCoords" << std::endl;
+    }
+
     if (m_materials.empty()) {
-        std::cout << "Mensaje: No se encontró archivo MTL o está vacío. Usando color gris por defecto (0.7, 0.7, 0.7)" << std::endl;
+        std::cout << "Mensaje: No se encontro archivo MTL o esta vacio. Usando color gris por defecto (0.7, 0.7, 0.7)" << std::endl;
     }
 
     calculateNormalization();
@@ -234,6 +267,16 @@ void OBJLoader::calculateNormalization() {
 
 void OBJLoader::setupBuffers() {
     for (auto& subMesh : m_subMeshes) {
+
+        // Verificar que todas las listas tengan el mismo tamaño
+        if (subMesh.normals.size() != subMesh.vertices.size()) {
+            std::cerr << "Warning: Mismatch entre vertices y normales, ajustando..." << std::endl;
+            subMesh.normals.resize(subMesh.vertices.size(), glm::vec3(0.0f, 1.0f, 0.0f));
+        }
+
+        if (subMesh.texCoords.size() != subMesh.vertices.size()) {
+            subMesh.texCoords.resize(subMesh.vertices.size(), glm::vec2(0.0f));
+        }
         glGenVertexArrays(1, &subMesh.VAO);
         glBindVertexArray(subMesh.VAO);
 
