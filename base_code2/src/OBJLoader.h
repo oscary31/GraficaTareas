@@ -3,7 +3,7 @@
 #include <vector>
 #include <map>
 #include <string>
-#include <glm.hpp>
+#include <glm/glm.hpp>
 
 struct Material {
     std::string name;
@@ -30,7 +30,15 @@ struct SubMesh {
     unsigned int VBO_texCoords;
     unsigned int EBO;
 
-    SubMesh() : VAO(0), VBO_vertices(0), VBO_normals(0), VBO_texCoords(0), EBO(0) {}
+    // Transform per submesh
+    glm::vec3 translation;
+
+    // Picking color ID
+    glm::vec3 pickingColor;
+
+    SubMesh() : VAO(0), VBO_vertices(0), VBO_normals(0), VBO_texCoords(0), EBO(0),
+        translation(0.0f), pickingColor(0.0f) {
+    }
 };
 
 class OBJLoader {
@@ -47,6 +55,7 @@ public:
 
     void setupBuffers();
     void cleanupBuffers();
+    void calculateVertexNormals();
 
 private:
     bool loadMTL(const std::string& mtlPath);

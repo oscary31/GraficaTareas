@@ -327,3 +327,61 @@ void OBJLoader::cleanupBuffers() {
         if (subMesh.EBO) glDeleteBuffers(1, &subMesh.EBO);
     }
 }
+
+void OBJLoader::calculateVertexNormals() {
+    for (auto& subMesh : m_subMeshes) {
+        // Si ya tiene normales, omitir
+        bool hasNormals = !subMesh.normals.empty();
+        for (const auto& n : subMesh.normals) {
+            if (glm::length(n) < 0.001f) {
+                hasNormals = false;
+                break;
+            }
+        }
+
+        if (hasNormals) continue;
+
+        // Reiniciar normales
+        subMesh.normals.clear();
+        subMesh.normals.resize(subMesh.vertices.size(), glm::vec3(0.0f));
+
+        // O(n): Recorrer todos los triángulos una vez
+        for (size_t i = 0; i < subMesh.indices.size(); i += 3) {
+            unsigned int i0 = subMesh.indices[i];
+            unsigned int i1 = subMesh.indices[i + 1];
+            unsigned int i2 = subMesh.indices[i + 2];
+
+            if (i0 >= subMesh.vertices.size() ||
+                i1 >= subMesh.vertices.size() ||
+                i2 >= subMesh.vertices.size()) {
+                continue;
+            }
+
+            glm::vec3 v0 = subMesh.vertices[i0];
+            glm::vec3 v1 = subMesh.vertices[i1];
+            glm::vec3 v2 = subMesh.vertices[i2];
+
+            // Calcular normal del triángulo
+            glm::vec3 edge1 = v1 - v0;
+            glm::vec3 edge2 = v2 - v0;
+            glm::vec3 faceNormal = glm::normalize(glm::cross(edge1, edge2));
+
+            // Acumular en cada vértice (promedio ponderado)
+            subMesh.normals[i0] += faceNormal;
+            subMesh.normals[i1] += faceNormal;
+            subMesh.normals[i2] += faceNormal;
+        }
+
+        // Normalizar todas las normales
+        for (auto& normal : subMesh.normals) {
+            if (glm::length(normal) > 0.001f) {
+                normal = glm::normalize(normal);
+            }
+            else {
+                normal = glm::vec3(0.0f, 1.0f, 0.0f);
+            }
+        }
+
+        std::cout << "Normales calculadas para un sub-mesh: " << subMesh.normals.size() << " normales" << std::endl;
+    }
+}

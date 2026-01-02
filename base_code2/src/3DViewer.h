@@ -19,7 +19,7 @@ public:
     void mainLoop();
     virtual ~C3DViewer();
 
-
+private:
     virtual void onKey(int key, int scancode, int action, int mods);
     virtual void onMouseButton(int button, int action, int mods);
     virtual void onCursorPos(double xpos, double ypos);
@@ -47,6 +47,7 @@ protected:
     // OBJ Loader
     OBJLoader m_objLoader;
     bool m_objLoaded = false;
+    int m_selectedSubMesh = -1;  // -1 = ninguno seleccionado
 
     // Camera
     glm::vec3 m_cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -57,6 +58,27 @@ protected:
     glm::mat4 m_projectionMatrix;
     glm::mat4 m_viewMatrix;
     glm::mat4 m_modelMatrix;
+
+    // Transformaciones del objeto
+    glm::vec3 m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
+    glm::vec3 m_objectScale = glm::vec3(1.0f);
+    glm::quat m_objectRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    // Mouse tracking
+    double m_lastMouseX = 0.0;
+    double m_lastMouseY = 0.0;
+    bool m_isDragging = false;
+
+    // Picking
+    GLuint m_pickingFBO = 0;
+    GLuint m_pickingTexture = 0;
+    GLuint m_pickingDepthBuffer = 0;
+    GLuint m_pickingShaderProgram = 0;
+
+    void setupPickingFramebuffer();
+    void renderForPicking();
+    int performPicking(int mouseX, int mouseY);
+    bool setupPickingShader();
 
     // Shaders actualizados para lighting básico
     const char* vertexShaderSrc = R"glsl(
@@ -111,6 +133,32 @@ protected:
             
             vec3 result = (ambient + diffuse + specular) * objectColor;
             FragColor = vec4(result, 1.0);
+        }
+    )glsl";
+
+    // Shader para picking
+    const char* pickingVertexShaderSrc = R"glsl(
+        #version 330 core
+        layout(location = 0) in vec3 aPos;
+        
+        uniform mat4 model;
+        uniform mat4 view;
+        uniform mat4 projection;
+        
+        void main() 
+        {
+            gl_Position = projection * view * model * vec4(aPos, 1.0);
+        }
+    )glsl";
+
+    const char* pickingFragmentShaderSrc = R"glsl(
+        #version 330 core
+        out vec4 FragColor;
+        
+        uniform vec3 pickingColor;
+        
+        void main() {
+            FragColor = vec4(pickingColor, 1.0);
         }
     )glsl";
 };
