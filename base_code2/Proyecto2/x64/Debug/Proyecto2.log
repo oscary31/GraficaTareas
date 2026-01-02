@@ -1,0 +1,13 @@
+﻿  imgui_impl_glfw.cpp
+  imgui_impl_opengl3.cpp
+  imgui.cpp
+  imgui_demo.cpp
+  imgui_draw.cpp
+  imgui_tables.cpp
+  imgui_widgets.cpp
+  main.cpp
+  3DViewer.cpp
+  Generando código...
+  glad.c
+LINK : warning LNK4098: la biblioteca predeterminada'MSVCRT' entra en conflicto con otras bibliotecas; use la biblioteca /NODEFAULTLIB:biblioteca
+  Proyecto2.vcxproj -> C:\Users\PC\Documents\Universidad\Semestre 2-2025\Gráfica\Proyecto2\base_code2\x64\Debug\Proyecto2.exe

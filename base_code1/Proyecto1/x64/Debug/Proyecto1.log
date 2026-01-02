@@ -1,6 +1,0 @@
-﻿  main.cpp
-C:\Users\PC\Documents\Universidad\Semestre 2-2025\Gráfica\Tareas\Tarea1\codigo_base_tarea_1\base_code1\src\main.cpp(42,21): warning C4244: 'inicializando': conversión de 'int' a 'float'; posible pérdida de datos
-C:\Users\PC\Documents\Universidad\Semestre 2-2025\Gráfica\Tareas\Tarea1\codigo_base_tarea_1\base_code1\src\main.cpp(53,21): warning C4244: 'inicializando': conversión de 'int' a 'float'; posible pérdida de datos
-C:\Users\PC\Documents\Universidad\Semestre 2-2025\Gráfica\Tareas\Tarea1\codigo_base_tarea_1\base_code1\src\main.cpp(64,21): warning C4244: 'inicializando': conversión de 'int' a 'float'; posible pérdida de datos
-C:\Users\PC\Documents\Universidad\Semestre 2-2025\Gráfica\Tareas\Tarea1\codigo_base_tarea_1\base_code1\src\main.cpp(75,21): warning C4244: 'inicializando': conversión de 'int' a 'float'; posible pérdida de datos
-  Proyecto1.vcxproj -> C:\Users\PC\Documents\Universidad\Semestre 2-2025\Gráfica\Tareas\Tarea1\codigo_base_tarea_1\base_code1\x64\Debug\Proyecto1.exe
