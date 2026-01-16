@@ -1,13 +1,9 @@
-﻿  imgui_impl_glfw.cpp
-  imgui_impl_opengl3.cpp
-  imgui.cpp
-  imgui_demo.cpp
-  imgui_draw.cpp
-  imgui_tables.cpp
-  imgui_widgets.cpp
+﻿  3DViewer.cpp
+C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(301,58): warning C4267: 'argumento': conversión de 'size_t' a 'GLsizei'; posible pérdida de datos
+C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(587,58): warning C4267: 'argumento': conversión de 'size_t' a 'GLsizei'; posible pérdida de datos
+  OBJLoader.cpp
+C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\OBJLoader.cpp(221,47): warning C4267: 'inicializando': conversión de 'size_t' a 'unsigned int'; posible pérdida de datos
   main.cpp
-  3DViewer.cpp
   Generando código...
-  glad.c
 LINK : warning LNK4098: la biblioteca predeterminada'MSVCRT' entra en conflicto con otras bibliotecas; use la biblioteca /NODEFAULTLIB:biblioteca
-  Proyecto2.vcxproj -> C:\Users\PC\Documents\Universidad\Semestre 2-2025\Gráfica\Proyecto2\base_code2\x64\Debug\Proyecto2.exe
+  Proyecto2.vcxproj -> C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\x64\Debug\Proyecto2.exe

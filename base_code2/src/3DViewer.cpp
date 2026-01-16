@@ -72,6 +72,13 @@ bool C3DViewer::setup()
     if (!setupPickingShader()) return false;
     setupPickingFramebuffer();
 
+    // VALIDACI?N: Asegurar que las dimensiones iniciales sean v?lidas
+    if (width <= 0 || height <= 0)
+    {
+        width = 1280;
+        height = 720;
+    }
+
     glViewport(0, 0, width, height);
 
     glfwSetKeyCallback(m_window, keyCallbackStatic);
@@ -131,7 +138,7 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
             m_lastMouseX = xpos;
             m_lastMouseY = ypos;
 
-            // Picking con botón izquierdo
+            // Picking con bot?n izquierdo
             if (button == GLFW_MOUSE_BUTTON_LEFT && m_objLoaded)
             {
                 int pickedID = performPicking((int)xpos, (int)ypos);
@@ -143,7 +150,7 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
                 else
                 {
                     m_selectedSubMesh = -1;
-                    std::cout << "Ningún sub-mesh seleccionado" << std::endl;
+                    std::cout << "Ning?n sub-mesh seleccionado" << std::endl;
                 }
             }
         }
@@ -162,7 +169,7 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
     double deltaX = xpos - m_lastMouseX;
     double deltaY = ypos - m_lastMouseY;
 
-    // Botón derecho: Rotar objeto
+    // Bot?n derecho: Rotar objeto
     if (mouseButtonsDown[GLFW_MOUSE_BUTTON_RIGHT])
     {
         m_isDragging = true;
@@ -171,16 +178,16 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
         float angleX = static_cast<float>(deltaY) * sensitivity;
         float angleY = static_cast<float>(deltaX) * sensitivity;
 
-        // Crear quaterniones para rotación
+        // Crear quaterniones para rotaci?n
         glm::quat qx = glm::angleAxis(angleX, glm::vec3(1.0f, 0.0f, 0.0f));
         glm::quat qy = glm::angleAxis(angleY, glm::vec3(0.0f, 1.0f, 0.0f));
 
-        // Acumular rotación
+        // Acumular rotaci?n
         m_objectRotation = qy * qx * m_objectRotation;
         m_objectRotation = glm::normalize(m_objectRotation);
     }
 
-    // Botón medio: Trasladar objeto o sub-mesh
+    // Bot?n medio: Trasladar objeto o sub-mesh
     if (mouseButtonsDown[GLFW_MOUSE_BUTTON_MIDDLE])
     {
         m_isDragging = true;
@@ -255,7 +262,7 @@ void C3DViewer::renderOBJ()
     glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
     glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
 
-    // Enviar matrices de vista y proyección
+    // Enviar matrices de vista y proyecci?n
     GLint viewLoc = glGetUniformLocation(m_shaderProgram, "view");
     GLint projLoc = glGetUniformLocation(m_shaderProgram, "projection");
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
@@ -276,13 +283,13 @@ void C3DViewer::renderOBJ()
     {
         const auto& subMesh = m_objLoader.getSubMeshes()[i];
 
-        // Aplicar transformación individual del submesh
+        // Aplicar transformaci?n individual del submesh
         glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
         m_modelMatrix = subMeshTransform * baseModel;
 
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
 
-        // Color: resaltar si está seleccionado
+        // Color: resaltar si est? seleccionado
         glm::vec3 color = subMesh.material.Kd;
         if ((int)i == m_selectedSubMesh)
         {
@@ -348,19 +355,19 @@ void C3DViewer::drawInterface()
         ImGui::Separator();
         ImGui::Text("Transformaciones del Objeto:");
 
-        // Traslación
+        // Traslaci?n
         if (ImGui::DragFloat3("Traslacion", &m_objectTranslation.x, 0.01f))
         {
-            // Actualizar automáticamente
+            // Actualizar autom?ticamente
         }
 
         // Escala
         if (ImGui::DragFloat3("Escala", &m_objectScale.x, 0.01f, 0.01f, 10.0f))
         {
-            // Actualizar automáticamente
+            // Actualizar autom?ticamente
         }
 
-        // Rotación (mostrar como ángulos de Euler)
+        // Rotaci?n (mostrar como ?ngulos de Euler)
         glm::vec3 eulerAngles = glm::degrees(glm::eulerAngles(m_objectRotation));
         if (ImGui::DragFloat3("Rotacion (grados)", &eulerAngles.x, 1.0f))
         {
@@ -392,7 +399,7 @@ void C3DViewer::drawInterface()
 
             if (ImGui::DragFloat3("Traslacion Sub-mesh", &selectedSM.translation.x, 0.01f))
             {
-                // Actualizar automáticamente
+                // Actualizar autom?ticamente
             }
 
             ImGui::ColorEdit3("Color Material", &selectedSM.material.Kd.x);
@@ -406,14 +413,23 @@ void C3DViewer::drawInterface()
 
 void C3DViewer::resize(int new_width, int new_height)
 {
-    width = new_width;
-    height = new_height;
+    // Evitar divisi?n por cero
+    if (new_width <= 0 || new_height <= 0)
+    {
+        std::cerr << "Advertencia: Dimensiones inv?lidas ("
+            << new_width << "x" << new_height << "), ignorando resize" << std::endl;
+        return;
+    }
+    // Establecer dimensiones m?nimas
+    width = std::max(1, new_width);
+    height = std::max(1, new_height);
+
     glViewport(0, 0, width, height);
     m_projectionMatrix = glm::perspective(glm::radians(45.0f),
         (float)width / (float)height,
         0.1f, 100.0f);
 
-    // Recrear framebuffer de picking con nuevo tamaño
+    // Recrear framebuffer de picking con nuevo tama?o
     if (m_pickingFBO)
     {
         glDeleteFramebuffers(1, &m_pickingFBO);
@@ -498,6 +514,14 @@ void C3DViewer::cursorPosCallbackStatic(GLFWwindow* window, double xpos, double 
 
 void C3DViewer::setupPickingFramebuffer()
 {
+    // VALIDACI?N: No crear framebuffer con dimensiones inv?lidas
+    if (width <= 0 || height <= 0)
+    {
+        std::cerr << "Error: No se puede crear framebuffer con dimensiones "
+            << width << "x" << height << std::endl;
+        return;
+    }
+
     glGenFramebuffers(1, &m_pickingFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_pickingFBO);
 
@@ -517,7 +541,7 @@ void C3DViewer::setupPickingFramebuffer()
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     {
-        std::cerr << "Error: Framebuffer de picking no está completo" << std::endl;
+        std::cerr << "Error: Framebuffer de picking no est? completo" << std::endl;
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -550,7 +574,7 @@ void C3DViewer::renderForPicking()
     GLint modelLoc = glGetUniformLocation(m_pickingShaderProgram, "model");
     GLint colorLoc = glGetUniformLocation(m_pickingShaderProgram, "pickingColor");
 
-    // Renderizar cada submesh con su color único
+    // Renderizar cada submesh con su color ?nico
     for (const auto& subMesh : m_objLoader.getSubMeshes())
     {
         glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
@@ -573,7 +597,7 @@ int C3DViewer::performPicking(int mouseX, int mouseY)
 
     glBindFramebuffer(GL_FRAMEBUFFER, m_pickingFBO);
 
-    // Leer pixel en posición del mouse (invertir Y)
+    // Leer pixel en posici?n del mouse (invertir Y)
     unsigned char pixel[3];
     glReadPixels(mouseX, height - mouseY, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, pixel);
 

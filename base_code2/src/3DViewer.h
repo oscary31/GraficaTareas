@@ -80,7 +80,7 @@ protected:
     int performPicking(int mouseX, int mouseY);
     bool setupPickingShader();
 
-    // Shaders actualizados para lighting básico
+    // Shaders actualizados para lighting b?sico
     const char* vertexShaderSrc = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPos;

@@ -145,7 +145,7 @@ bool OBJLoader::load(const std::string& objPath) {
 
             if (m_materials.find(currentMaterialName) != m_materials.end()) {
                 currentSubMesh.material = m_materials[currentMaterialName];
-				std::cout << "Material '" << currentMaterialName << "' asignado al sub-mesh" << std::endl;
+                std::cout << "Material '" << currentMaterialName << "' asignado al sub-mesh" << std::endl;
             }
             else {
                 currentSubMesh.material = Material();
@@ -167,21 +167,21 @@ bool OBJLoader::load(const std::string& objPath) {
                 faceVertices.push_back(vertex);
             }
 
-            // Triangular la cara (triángulos y quads)
+            // Triangular la cara (tri?ngulos y quads)
             for (size_t i = 1; i + 1 < faceVertices.size(); ++i) {
                 unsigned int triangleIndices[3] = { 0, static_cast<unsigned int>(i), static_cast<unsigned int>(i + 1) };
 
                 for (size_t j = 0; j < 3; ++j) {
                     std::string& fv = faceVertices[triangleIndices[j]];
 
-                    // Buscar si ya existe este vértice
+                    // Buscar si ya existe este v?rtice
                     auto it = vertexIndexMap.find(fv);
                     if (it != vertexIndexMap.end()) {
-                        // Vértice ya existe, usar índice existente
+                        // V?rtice ya existe, usar ?ndice existente
                         currentSubMesh.indices.push_back(it->second);
                     }
                     else {
-                        // Nuevo vértice, procesar índices
+                        // Nuevo v?rtice, procesar ?ndices
                         std::istringstream faceStream(fv);
                         std::string indexStr;
                         int indices[3] = { 0, 0, 0 };
@@ -217,7 +217,7 @@ bool OBJLoader::load(const std::string& objPath) {
                             currentSubMesh.normals.push_back(glm::vec3(0.0f, 1.0f, 0.0f));
                         }
 
-                        // Añadir nuevo índice y mapear
+                        // A?adir nuevo ?ndice y mapear
                         unsigned int newIndex = currentSubMesh.vertices.size() - 1;
                         currentSubMesh.indices.push_back(newIndex);
                         vertexIndexMap[fv] = newIndex;
@@ -238,7 +238,7 @@ bool OBJLoader::load(const std::string& objPath) {
         return false;
     }
 
-    // Añadir depuración
+    // A?adir depuraci?n
     std::cout << "INFO: OBJ cargado con " << m_subMeshes.size() << " sub-mallados" << std::endl;
     for (size_t i = 0; i < m_subMeshes.size(); ++i) {
         std::cout << "  SubMesh " << i << ": "
@@ -268,7 +268,7 @@ void OBJLoader::calculateNormalization() {
 void OBJLoader::setupBuffers() {
     for (auto& subMesh : m_subMeshes) {
 
-        // Verificar que todas las listas tengan el mismo tamaño
+        // Verificar que todas las listas tengan el mismo tama?o
         if (subMesh.normals.size() != subMesh.vertices.size()) {
             std::cerr << "Warning: Mismatch entre vertices y normales, ajustando..." << std::endl;
             subMesh.normals.resize(subMesh.vertices.size(), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -345,7 +345,7 @@ void OBJLoader::calculateVertexNormals() {
         subMesh.normals.clear();
         subMesh.normals.resize(subMesh.vertices.size(), glm::vec3(0.0f));
 
-        // O(n): Recorrer todos los triángulos una vez
+        // O(n): Recorrer todos los tri?ngulos una vez
         for (size_t i = 0; i < subMesh.indices.size(); i += 3) {
             unsigned int i0 = subMesh.indices[i];
             unsigned int i1 = subMesh.indices[i + 1];
@@ -361,12 +361,12 @@ void OBJLoader::calculateVertexNormals() {
             glm::vec3 v1 = subMesh.vertices[i1];
             glm::vec3 v2 = subMesh.vertices[i2];
 
-            // Calcular normal del triángulo
+            // Calcular normal del tri?ngulo
             glm::vec3 edge1 = v1 - v0;
             glm::vec3 edge2 = v2 - v0;
             glm::vec3 faceNormal = glm::normalize(glm::cross(edge1, edge2));
 
-            // Acumular en cada vértice (promedio ponderado)
+            // Acumular en cada v?rtice (promedio ponderado)
             subMesh.normals[i0] += faceNormal;
             subMesh.normals[i1] += faceNormal;
             subMesh.normals[i2] += faceNormal;
