@@ -49,7 +49,6 @@ bool C3DViewer::setup()
         return false;
     }
 
-    // Habilitar depth testing
     glEnable(GL_DEPTH_TEST);
 
     IMGUI_CHECKVERSION();
@@ -70,9 +69,10 @@ bool C3DViewer::setup()
 
     if (!setupShader()) return false;
     if (!setupPickingShader()) return false;
+    if (!setupBoundingBoxShader()) return false;  // NUEVO
     setupPickingFramebuffer();
+    setupBoundingBox();  // NUEVO
 
-    // VALIDACI?N: Asegurar que las dimensiones iniciales sean v?lidas
     if (width <= 0 || height <= 0)
     {
         width = 1280;
@@ -85,7 +85,6 @@ bool C3DViewer::setup()
     glfwSetMouseButtonCallback(m_window, mouseButtonCallbackStatic);
     glfwSetCursorPosCallback(m_window, cursorPosCallbackStatic);
 
-    // Inicializar matrices
     m_projectionMatrix = glm::perspective(glm::radians(45.0f),
         (float)width / (float)height,
         0.1f, 100.0f);
@@ -122,11 +121,29 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
             glfwSetWindowShouldClose(m_window, GLFW_TRUE);
         else if (key == GLFW_KEY_O)
             loadOBJFile();
+        else if (key == GLFW_KEY_DELETE && m_selectedSubMesh >= 0)  // NUEVO
+        {
+            auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
+            if (m_selectedSubMesh < (int)subMeshes.size())
+            {
+                subMeshes.erase(subMeshes.begin() + m_selectedSubMesh);
+                m_selectedSubMesh = -1;
+                assignPickingColors();
+                std::cout << "Sub-mesh eliminado" << std::endl;
+            }
+        }
     }
 }
 
+// Modificada: Verificación de ImGui para evitar conflictos
 void C3DViewer::onMouseButton(int button, int action, int mods)
 {
+    // NUEVO: Verificar si ImGui capturó el evento
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantCaptureMouse) {
+        return;
+    }
+
     if (button >= 0 && button < 3)
     {
         double xpos, ypos;
@@ -138,7 +155,6 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
             m_lastMouseX = xpos;
             m_lastMouseY = ypos;
 
-            // Picking con bot?n izquierdo
             if (button == GLFW_MOUSE_BUTTON_LEFT && m_objLoaded)
             {
                 int pickedID = performPicking((int)xpos, (int)ypos);
@@ -150,7 +166,7 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
                 else
                 {
                     m_selectedSubMesh = -1;
-                    std::cout << "Ning?n sub-mesh seleccionado" << std::endl;
+                    std::cout << "Ningún sub-mesh seleccionado" << std::endl;
                 }
             }
         }
@@ -162,15 +178,23 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
     }
 }
 
+// Modificada: Verificación de ImGui para evitar conflictos
 void C3DViewer::onCursorPos(double xpos, double ypos)
 {
+    // NUEVO: Verificar si ImGui capturó el evento
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantCaptureMouse) {
+        m_lastMouseX = xpos;
+        m_lastMouseY = ypos;
+        return;
+    }
+
     if (!m_objLoaded) return;
 
     double deltaX = xpos - m_lastMouseX;
     double deltaY = ypos - m_lastMouseY;
 
-    // Bot?n derecho: Rotar objeto
-    if (mouseButtonsDown[GLFW_MOUSE_BUTTON_RIGHT])
+    if (mouseButtonsDown[GLFW_MOUSE_BUTTON_LEFT])
     {
         m_isDragging = true;
 
@@ -178,21 +202,18 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
         float angleX = static_cast<float>(deltaY) * sensitivity;
         float angleY = static_cast<float>(deltaX) * sensitivity;
 
-        // Crear quaterniones para rotaci?n
         glm::quat qx = glm::angleAxis(angleX, glm::vec3(1.0f, 0.0f, 0.0f));
         glm::quat qy = glm::angleAxis(angleY, glm::vec3(0.0f, 1.0f, 0.0f));
 
-        // Acumular rotaci?n
         m_objectRotation = qy * qx * m_objectRotation;
         m_objectRotation = glm::normalize(m_objectRotation);
     }
 
-    // Bot?n medio: Trasladar objeto o sub-mesh
-    if (mouseButtonsDown[GLFW_MOUSE_BUTTON_MIDDLE])
+    if (mouseButtonsDown[GLFW_MOUSE_BUTTON_RIGHT])
     {
         m_isDragging = true;
 
-        float sensitivity = 0.005f;
+        float sensitivity = 0.002f;
         glm::vec3 translation(
             static_cast<float>(deltaX) * sensitivity,
             static_cast<float>(-deltaY) * sensitivity,
@@ -234,11 +255,8 @@ void C3DViewer::loadOBJFile()
         if (m_objLoader.load(filePath))
         {
             m_objLoaded = true;
+            assignPickingColors();  // NUEVO
             std::cout << "OBJ cargado exitosamente" << std::endl;
-            std::cout << "Centro: (" << m_objLoader.getCenter().x << ", "
-                << m_objLoader.getCenter().y << ", "
-                << m_objLoader.getCenter().z << ")" << std::endl;
-            std::cout << "Factor de escala: " << m_objLoader.getScaleFactor().x << std::endl;
         }
         else
         {
@@ -247,13 +265,13 @@ void C3DViewer::loadOBJFile()
     }
 }
 
+// Modificada: Renderizado del bounding box
 void C3DViewer::renderOBJ()
 {
     if (!m_objLoaded) return;
 
     glUseProgram(m_shaderProgram);
 
-    // Configurar matrices base
     glm::mat4 normalizationMatrix = glm::mat4(1.0f);
     normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
     normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
@@ -262,13 +280,11 @@ void C3DViewer::renderOBJ()
     glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
     glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
 
-    // Enviar matrices de vista y proyecci?n
     GLint viewLoc = glGetUniformLocation(m_shaderProgram, "view");
     GLint projLoc = glGetUniformLocation(m_shaderProgram, "projection");
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
 
-    // Lighting
     glm::vec3 lightPos(2.0f, 2.0f, 2.0f);
     glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
 
@@ -278,28 +294,28 @@ void C3DViewer::renderOBJ()
 
     GLint modelLoc = glGetUniformLocation(m_shaderProgram, "model");
 
-    // Renderizar cada submesh
     for (size_t i = 0; i < m_objLoader.getSubMeshes().size(); ++i)
     {
         const auto& subMesh = m_objLoader.getSubMeshes()[i];
 
-        // Aplicar transformaci?n individual del submesh
         glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
         m_modelMatrix = subMeshTransform * baseModel;
 
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
 
-        // Color: resaltar si est? seleccionado
         glm::vec3 color = subMesh.material.Kd;
-        if ((int)i == m_selectedSubMesh)
-        {
-            color = glm::vec3(1.0f, 0.8f, 0.2f); // Color amarillo para seleccionado
-        }
         glUniform3fv(glGetUniformLocation(m_shaderProgram, "objectColor"), 1, glm::value_ptr(color));
 
         glBindVertexArray(subMesh.VAO);
         glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
+    }
+
+    // NUEVO: Renderizar bounding box del submesh seleccionado
+    if (m_selectedSubMesh >= 0 && m_selectedSubMesh < (int)m_objLoader.getSubMeshes().size())
+    {
+        const auto& selectedSubMesh = m_objLoader.getSubMeshes()[m_selectedSubMesh];
+        renderBoundingBox(selectedSubMesh, baseModel);
     }
 }
 
@@ -321,7 +337,7 @@ void C3DViewer::drawInterface()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_Once);
+    ImGui::SetNextWindowSize(ImVec2(400, 600), ImGuiCond_Once);
     ImGui::Begin("Control Panel");
 
     ImGui::Text("Presiona 'O' para cargar OBJ");
@@ -351,25 +367,21 @@ void C3DViewer::drawInterface()
         ImGui::BulletText("Click izq: Seleccionar sub-mesh");
         ImGui::BulletText("Click medio + arrastrar: Trasladar");
         ImGui::BulletText("Click der + arrastrar: Rotar");
+        ImGui::BulletText("Delete: Eliminar sub-mesh seleccionado");  // NUEVO
 
         ImGui::Separator();
         ImGui::Text("Transformaciones del Objeto:");
 
-        // Traslaci?n
-        if (ImGui::DragFloat3("Traslacion", &m_objectTranslation.x, 0.01f))
+        if (ImGui::DragFloat3("Traslacion##obj", &m_objectTranslation.x, 0.01f))
         {
-            // Actualizar autom?ticamente
         }
 
-        // Escala
-        if (ImGui::DragFloat3("Escala", &m_objectScale.x, 0.01f, 0.01f, 10.0f))
+        if (ImGui::DragFloat3("Escala##obj", &m_objectScale.x, 0.01f, 0.01f, 10.0f))
         {
-            // Actualizar autom?ticamente
         }
 
-        // Rotaci?n (mostrar como ?ngulos de Euler)
         glm::vec3 eulerAngles = glm::degrees(glm::eulerAngles(m_objectRotation));
-        if (ImGui::DragFloat3("Rotacion (grados)", &eulerAngles.x, 1.0f))
+        if (ImGui::DragFloat3("Rotacion (grados)##obj", &eulerAngles.x, 1.0f))
         {
             m_objectRotation = glm::quat(glm::radians(eulerAngles));
         }
@@ -381,7 +393,6 @@ void C3DViewer::drawInterface()
             m_objectRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
             m_selectedSubMesh = -1;
 
-            // Resetear transformaciones de submeshes
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             for (auto& sm : subMeshes)
             {
@@ -389,20 +400,33 @@ void C3DViewer::drawInterface()
             }
         }
 
-        // Info de sub-mesh seleccionado
-        if (m_selectedSubMesh >= 0)
+        // NUEVO: Configuración de sub-mesh seleccionado
+        if (m_selectedSubMesh >= 0 && m_selectedSubMesh < (int)m_objLoader.getSubMeshes().size())
         {
             ImGui::Separator();
-            ImGui::Text("Sub-mesh Seleccionado:");
+            ImGui::Text("Sub-mesh Seleccionado: %d", m_selectedSubMesh);
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             auto& selectedSM = subMeshes[m_selectedSubMesh];
 
             if (ImGui::DragFloat3("Traslacion Sub-mesh", &selectedSM.translation.x, 0.01f))
             {
-                // Actualizar autom?ticamente
             }
 
-            ImGui::ColorEdit3("Color Material", &selectedSM.material.Kd.x);
+            if (ImGui::ColorEdit3("Color Material (Kd)", &selectedSM.material.Kd.x))
+            {
+            }
+
+            if (ImGui::Button("Eliminar Sub-mesh"))
+            {
+                subMeshes.erase(subMeshes.begin() + m_selectedSubMesh);
+                m_selectedSubMesh = -1;
+                assignPickingColors();
+                std::cout << "Sub-mesh eliminado desde interfaz" << std::endl;
+            }
+
+            ImGui::Separator();
+            ImGui::Text("Bounding Box:");
+            ImGui::ColorEdit3("Color Bounding Box", &m_boundingBoxColor.x);
         }
     }
 
@@ -630,4 +654,136 @@ bool C3DViewer::setupPickingShader()
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
     return true;
+}
+
+void C3DViewer::assignPickingColors()
+{
+    auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
+
+    for (size_t i = 0; i < subMeshes.size(); ++i)
+    {
+        int id = i + 1;
+
+        int r = (id & 0x000000FF) >> 0;
+        int g = (id & 0x0000FF00) >> 8;
+        int b = (id & 0x00FF0000) >> 16;
+
+        subMeshes[i].pickingColor = glm::vec3(r / 255.0f, g / 255.0f, b / 255.0f);
+
+        std::cout << "SubMesh " << i << " - ID: " << id
+            << " Color: (" << r << ", " << g << ", " << b << ")" << std::endl;
+    }
+}
+
+void C3DViewer::setupBoundingBox()
+{
+    float vertices[] = {
+        -0.5f, -0.5f, -0.5f,
+         0.5f, -0.5f, -0.5f,
+         0.5f,  0.5f, -0.5f,
+        -0.5f,  0.5f, -0.5f,
+        -0.5f, -0.5f,  0.5f,
+         0.5f, -0.5f,  0.5f,
+         0.5f,  0.5f,  0.5f,
+        -0.5f,  0.5f,  0.5f
+    };
+
+    unsigned int indices[] = {
+        0, 1,  1, 2,  2, 3,  3, 0,
+        4, 5,  5, 6,  6, 7,  7, 4,
+        0, 4,  1, 5,  2, 6,  3, 7
+    };
+
+    glGenVertexArrays(1, &m_boundingBoxVAO);
+    glGenBuffers(1, &m_boundingBoxVBO);
+    glGenBuffers(1, &m_boundingBoxEBO);
+
+    glBindVertexArray(m_boundingBoxVAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_boundingBoxVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_boundingBoxEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glBindVertexArray(0);
+}
+
+bool C3DViewer::setupBoundingBoxShader()
+{
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &boundingBoxVertexShaderSrc, nullptr);
+    glCompileShader(vertexShader);
+    if (!checkCompileErrors(vertexShader, "BBOX_VERTEX")) return false;
+
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &boundingBoxFragmentShaderSrc, nullptr);
+    glCompileShader(fragmentShader);
+    if (!checkCompileErrors(fragmentShader, "BBOX_FRAGMENT")) return false;
+
+    m_boundingBoxShaderProgram = glCreateProgram();
+    glAttachShader(m_boundingBoxShaderProgram, vertexShader);
+    glAttachShader(m_boundingBoxShaderProgram, fragmentShader);
+    glLinkProgram(m_boundingBoxShaderProgram);
+    if (!checkCompileErrors(m_boundingBoxShaderProgram, "BBOX_PROGRAM")) return false;
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+    return true;
+}
+
+void C3DViewer::calculateSubMeshBounds(const SubMesh& subMesh, glm::vec3& minBounds, glm::vec3& maxBounds)
+{
+    if (subMesh.vertices.empty()) {
+        minBounds = glm::vec3(0.0f);
+        maxBounds = glm::vec3(0.0f);
+        return;
+    }
+
+    minBounds = glm::vec3(std::numeric_limits<float>::max());
+    maxBounds = glm::vec3(std::numeric_limits<float>::lowest());
+
+    for (const auto& vertex : subMesh.vertices)
+    {
+        minBounds = glm::min(minBounds, vertex);
+        maxBounds = glm::max(maxBounds, vertex);
+    }
+}
+
+void C3DViewer::renderBoundingBox(const SubMesh& subMesh, const glm::mat4& baseModel)
+{
+    glm::vec3 minBounds, maxBounds;
+    calculateSubMeshBounds(subMesh, minBounds, maxBounds);
+
+    glm::vec3 center = (minBounds + maxBounds) * 0.5f;
+    glm::vec3 size = maxBounds - minBounds;
+
+    glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
+    glm::mat4 boxModel = subMeshTransform * baseModel;
+
+    boxModel = glm::translate(boxModel, center);
+    boxModel = glm::scale(boxModel, size);
+
+    glUseProgram(m_boundingBoxShaderProgram);
+
+    GLint viewLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "view");
+    GLint projLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "projection");
+    GLint modelLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "model");
+    GLint colorLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "boxColor");
+
+    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
+    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
+    glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(boxModel));
+    glUniform3fv(colorLoc, 1, glm::value_ptr(m_boundingBoxColor));
+
+    glDisable(GL_DEPTH_TEST);
+
+    glBindVertexArray(m_boundingBoxVAO);
+    glDrawElements(GL_LINES, 24, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(0);
+
+    glEnable(GL_DEPTH_TEST);
 }

@@ -47,7 +47,7 @@ protected:
     // OBJ Loader
     OBJLoader m_objLoader;
     bool m_objLoaded = false;
-    int m_selectedSubMesh = -1;  // -1 = ninguno seleccionado
+    int m_selectedSubMesh = -1;
 
     // Camera
     glm::vec3 m_cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -79,8 +79,21 @@ protected:
     void renderForPicking();
     int performPicking(int mouseX, int mouseY);
     bool setupPickingShader();
+    void assignPickingColors();
 
-    // Shaders actualizados para lighting b?sico
+    // Bounding Box
+    GLuint m_boundingBoxVAO = 0;
+    GLuint m_boundingBoxVBO = 0;
+    GLuint m_boundingBoxEBO = 0;
+    GLuint m_boundingBoxShaderProgram = 0;
+    glm::vec3 m_boundingBoxColor = glm::vec3(1.0f, 1.0f, 0.0f); // Amarillo por defecto
+
+    void setupBoundingBox();
+    void renderBoundingBox(const SubMesh& subMesh, const glm::mat4& baseModel);
+    bool setupBoundingBoxShader();
+    void calculateSubMeshBounds(const SubMesh& subMesh, glm::vec3& minBounds, glm::vec3& maxBounds);
+
+    // Shaders actualizados para lighting básico
     const char* vertexShaderSrc = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPos;
@@ -159,6 +172,32 @@ protected:
         
         void main() {
             FragColor = vec4(pickingColor, 1.0);
+        }
+    )glsl";
+
+    // Shader para Bounding Box
+    const char* boundingBoxVertexShaderSrc = R"glsl(
+        #version 330 core
+        layout(location = 0) in vec3 aPos;
+        
+        uniform mat4 model;
+        uniform mat4 view;
+        uniform mat4 projection;
+        
+        void main() 
+        {
+            gl_Position = projection * view * model * vec4(aPos, 1.0);
+        }
+    )glsl";
+
+    const char* boundingBoxFragmentShaderSrc = R"glsl(
+        #version 330 core
+        out vec4 FragColor;
+        
+        uniform vec3 boxColor;
+        
+        void main() {
+            FragColor = vec4(boxColor, 1.0);
         }
     )glsl";
 };
