@@ -10,6 +10,8 @@
 #include "imgui/backends/imgui_impl_glfw.h"
 #include "imgui/backends/imgui_impl_opengl3.h"
 #include "OBJLoader.h"
+#include <vector>
+#include <deque>
 
 class C3DViewer
 {
@@ -32,6 +34,46 @@ private:
     void loadOBJFile();
     void renderOBJ();
 
+    // Visualización de normales
+    bool m_showNormals = false;
+    bool m_showNormalsPerVertex = true; // nuevo: controlar ver/ocultar normales por vértice
+    float m_normalLengthPercent = 0.05f; // porcentaje (0..1) de la diagonal world del bounding box
+    glm::vec3 m_normalColor = glm::vec3(0.0f, 1.0f, 1.0f); // color editable
+    GLuint m_normalVAO = 0;
+    GLuint m_normalVBO = 0;
+    GLuint m_normalShaderProgram = 0;
+    std::vector<glm::vec3> m_normalLines;
+
+    // para dibujar por sub-mesh (offsets/counts)
+    std::vector<int> m_normalOffsets;
+    std::vector<int> m_normalCounts;
+
+    bool setupNormalShader();
+    void generateNormalLines();
+    void renderNormals();
+
+    // Visualización de vértices
+    bool m_showVertices = false;
+    float m_vertexSize = 5.0f;
+    glm::vec3 m_vertexColor = glm::vec3(1.0f, 0.0f, 0.0f); // Rojo por defecto
+    GLuint m_vertexVAO = 0;
+    GLuint m_vertexVBO = 0;
+    GLuint m_vertexShaderProgram = 0;
+    std::vector<glm::vec3> m_vertexPoints;
+
+    // Ranges por sub-mesh para dibujar partes del buffer combinado
+    std::vector<int> m_vertexOffsets;
+    std::vector<int> m_vertexCounts;
+
+    bool setupVertexShader();
+    void generateVertexPoints();
+    void renderVertices();
+
+    // Depth test y Culling
+    bool m_depthTestEnabled = true;               // habilita/deshabilita Z-buffer (GL_DEPTH_TEST)
+    bool m_backfaceCullingEnabled = true;         // habilita/deshabilita back-face culling (GL_CULL_FACE)
+    GLenum m_cullFaceMode = GL_BACK;
+
     static void keyCallbackStatic(GLFWwindow* window, int key, int scancode, int action, int mods);
     static void mouseButtonCallbackStatic(GLFWwindow* window, int button, int action, int mods);
     static void cursorPosCallbackStatic(GLFWwindow* window, double xpos, double ypos);
@@ -43,6 +85,18 @@ protected:
     GLuint m_shaderProgram = 0;
     double lastTime = 0.0;
     bool mouseButtonsDown[3] = { false, false, false };
+
+    // Mostrar FPS (promedio últimos N segundos)
+    bool m_showFPS = false;
+    std::deque<double> m_frameTimestamps;   // timestamps de frames
+    double m_fpsWindowSeconds = 5.0;        // ventana para promedio (segundos)
+    double m_fpsAverage = 0.0;              // valor calculado del FPS
+
+    // Antialiasing de líneas
+    bool m_lineAntiAlias = false;
+
+    // Color de fondo (editable)
+    glm::vec3 m_backgroundColor = glm::vec3(0.15f, 0.15f, 0.2f);
 
     // OBJ Loader
     OBJLoader m_objLoader;
@@ -87,6 +141,16 @@ protected:
     GLuint m_boundingBoxEBO = 0;
     GLuint m_boundingBoxShaderProgram = 0;
     glm::vec3 m_boundingBoxColor = glm::vec3(1.0f, 1.0f, 0.0f); // Amarillo por defecto
+
+    // Relleno / Alambrado
+    bool m_showFill = true;                     // mostrar relleno de triángulos
+    bool m_showWireframe = false;               // mostrar alambrado
+    glm::vec3 m_wireframeColor = glm::vec3(0.0f, 0.0f, 0.0f); // color del alambrado (negro por defecto)
+    float m_wireframeLineWidth = 1.0f;          // grosor del alambrado
+
+    // Parámetros para evitar z-fighting (se usan cuando se dibuja relleno)
+    float m_fillPolygonOffsetFactor = 1.0f;
+    float m_fillPolygonOffsetUnits = 1.0f;
 
     void setupBoundingBox();
     void renderBoundingBox(const SubMesh& subMesh, const glm::mat4& baseModel);
@@ -200,4 +264,62 @@ protected:
             FragColor = vec4(boxColor, 1.0);
         }
     )glsl";
+
+    // Shader para normales (agregar junto a los otros shaders)
+    const char* normalVertexShaderSrc = R"glsl(
+    #version 330 core
+    layout(location = 0) in vec3 aPos;
+    
+    uniform mat4 model;
+    uniform mat4 view;
+    uniform mat4 projection;
+    
+    void main() 
+    {
+        gl_Position = projection * view * model * vec4(aPos, 1.0);
+    }
+)glsl";
+
+    const char* normalFragmentShaderSrc = R"glsl(
+    #version 330 core
+    out vec4 FragColor;
+    
+    uniform vec3 normalColor;
+    
+    void main() {
+        FragColor = vec4(normalColor, 1.0);
+    }
+)glsl";
+
+    // Shader para vértices
+    const char* vertexPointVertexShaderSrc = R"glsl(
+    #version 330 core
+    layout(location = 0) in vec3 aPos;
+    
+    uniform mat4 model;
+    uniform mat4 view;
+    uniform mat4 projection;
+    
+    void main() 
+    {
+        gl_Position = projection * view * model * vec4(aPos, 1.0);
+    }
+)glsl";
+
+    const char* vertexPointFragmentShaderSrc = R"glsl(
+    #version 330 core
+    out vec4 FragColor;
+    
+    uniform vec3 vertexColor;
+    
+    void main() {
+        // gl_PointCoord va de (0,0) a (1,1) sobre el punto rasterizado
+        vec2 coord = gl_PointCoord - vec2(0.5);
+        float dist = length(coord);
+        // Smooth edge: alpha decrece cerca del borde para antialiasing
+        float alpha = 1.0 - smoothstep(0.48, 0.5, dist);
+        if (dist > 0.5) discard; // fuera del círculo
+        FragColor = vec4(vertexColor, alpha);
+    }
+)glsl";
 };

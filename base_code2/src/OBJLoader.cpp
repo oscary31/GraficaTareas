@@ -82,11 +82,10 @@ bool OBJLoader::load(const std::string& objPath) {
 
     std::ifstream file(objPath);
     if (!file.is_open()) {
-        std::cout << "ERROR" << std::endl;
         std::cerr << "Error: No se pudo abrir el archivo OBJ: " << objPath << std::endl;
         return false;
     }
-    std::cout << "NO ERROR" << std::endl;
+
     // Intentar cargar MTL
     size_t lastSlash = objPath.find_last_of("/\\");
     std::string directory = (lastSlash != std::string::npos) ? objPath.substr(0, lastSlash + 1) : "";
@@ -167,21 +166,21 @@ bool OBJLoader::load(const std::string& objPath) {
                 faceVertices.push_back(vertex);
             }
 
-            // Triangular la cara (tri?ngulos y quads)
+            // Triangular la cara (triángulos y quads)
             for (size_t i = 1; i + 1 < faceVertices.size(); ++i) {
                 unsigned int triangleIndices[3] = { 0, static_cast<unsigned int>(i), static_cast<unsigned int>(i + 1) };
 
                 for (size_t j = 0; j < 3; ++j) {
                     std::string& fv = faceVertices[triangleIndices[j]];
 
-                    // Buscar si ya existe este v?rtice
+                    // Buscar si ya existe este vértice
                     auto it = vertexIndexMap.find(fv);
                     if (it != vertexIndexMap.end()) {
-                        // V?rtice ya existe, usar ?ndice existente
+                        // Vértice ya existe, usar índice existente
                         currentSubMesh.indices.push_back(it->second);
                     }
                     else {
-                        // Nuevo v?rtice, procesar ?ndices
+                        // Nuevo vértice, procesar índices
                         std::istringstream faceStream(fv);
                         std::string indexStr;
                         int indices[3] = { 0, 0, 0 };
@@ -213,11 +212,12 @@ bool OBJLoader::load(const std::string& objPath) {
                             currentSubMesh.normals.push_back(tempNormals[vnIdx]);
                         }
                         else {
-                            // Calcular normal por defecto
-                            currentSubMesh.normals.push_back(glm::vec3(0.0f, 1.0f, 0.0f));
+                            // NO añadir normal por defecto aquí
+                            // Dejar que calculateVertexNormals() las calcule después
+                            currentSubMesh.normals.push_back(glm::vec3(0.0f, 0.0f, 0.0f));
                         }
 
-                        // A?adir nuevo ?ndice y mapear
+                        // Añadir nuevo índice y mapear
                         unsigned int newIndex = currentSubMesh.vertices.size() - 1;
                         currentSubMesh.indices.push_back(newIndex);
                         vertexIndexMap[fv] = newIndex;
@@ -238,7 +238,7 @@ bool OBJLoader::load(const std::string& objPath) {
         return false;
     }
 
-    // A?adir depuraci?n
+    // Añadir depuración
     std::cout << "INFO: OBJ cargado con " << m_subMeshes.size() << " sub-mallados" << std::endl;
     for (size_t i = 0; i < m_subMeshes.size(); ++i) {
         std::cout << "  SubMesh " << i << ": "
@@ -253,6 +253,13 @@ bool OBJLoader::load(const std::string& objPath) {
     }
 
     calculateNormalization();
+
+    // ============================================================
+    // AQUÍ ES DONDE DEBES LLAMAR A calculateVertexNormals()
+    // Se llama DESPUÉS de cargar todo el OBJ y ANTES de setupBuffers()
+    // ============================================================
+    calculateVertexNormals();
+
     setupBuffers();
 
     return true;
@@ -331,6 +338,7 @@ void OBJLoader::cleanupBuffers() {
 void OBJLoader::calculateVertexNormals() {
     for (auto& subMesh : m_subMeshes) {
         // Si ya tiene normales, omitir
+
         bool hasNormals = !subMesh.normals.empty();
         for (const auto& n : subMesh.normals) {
             if (glm::length(n) < 0.001f) {
@@ -340,6 +348,7 @@ void OBJLoader::calculateVertexNormals() {
         }
 
         if (hasNormals) continue;
+		std::cout << "Calculando normales para un sub-mesh..." << std::endl;    
 
         // Reiniciar normales
         subMesh.normals.clear();
@@ -370,6 +379,7 @@ void OBJLoader::calculateVertexNormals() {
             subMesh.normals[i0] += faceNormal;
             subMesh.normals[i1] += faceNormal;
             subMesh.normals[i2] += faceNormal;
+			std::cout << "Face normal: (" << faceNormal.x << ", " << faceNormal.y << ", " << faceNormal.z << ")" << std::endl;
         }
 
         // Normalizar todas las normales

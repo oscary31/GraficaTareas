@@ -1,6 +1,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "3DViewer.h"
 #include <iostream>
+
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include "tinyfiledialogs.h"
@@ -17,9 +18,18 @@ C3DViewer::~C3DViewer()
 
     if (m_shaderProgram) glDeleteProgram(m_shaderProgram);
     if (m_pickingShaderProgram) glDeleteProgram(m_pickingShaderProgram);
+    if (m_boundingBoxShaderProgram) glDeleteProgram(m_boundingBoxShaderProgram);
+    if (m_normalShaderProgram) glDeleteProgram(m_normalShaderProgram);  // NUEVO
+    if (m_vertexVAO) glDeleteVertexArrays(1, &m_vertexVAO);
+    if (m_vertexVBO) glDeleteBuffers(1, &m_vertexVBO);
     if (m_pickingFBO) glDeleteFramebuffers(1, &m_pickingFBO);
     if (m_pickingTexture) glDeleteTextures(1, &m_pickingTexture);
     if (m_pickingDepthBuffer) glDeleteRenderbuffers(1, &m_pickingDepthBuffer);
+    if (m_boundingBoxVAO) glDeleteVertexArrays(1, &m_boundingBoxVAO);
+    if (m_boundingBoxVBO) glDeleteBuffers(1, &m_boundingBoxVBO);
+    if (m_boundingBoxEBO) glDeleteBuffers(1, &m_boundingBoxEBO);
+    if (m_normalVAO) glDeleteVertexArrays(1, &m_normalVAO);  // NUEVO
+    if (m_normalVBO) glDeleteBuffers(1, &m_normalVBO);  // NUEVO
     if (m_window) glfwDestroyWindow(m_window);
     glfwTerminate();
 }
@@ -49,7 +59,19 @@ bool C3DViewer::setup()
         return false;
     }
 
-    glEnable(GL_DEPTH_TEST);
+    // Inicializar estado de depth-test y culling según flags
+    if (m_depthTestEnabled)
+        glEnable(GL_DEPTH_TEST);
+    else
+        glDisable(GL_DEPTH_TEST);
+
+    if (m_backfaceCullingEnabled) {
+        glEnable(GL_CULL_FACE);
+        glCullFace(m_cullFaceMode);
+    }
+    else {
+        glDisable(GL_CULL_FACE);
+    }
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -69,9 +91,11 @@ bool C3DViewer::setup()
 
     if (!setupShader()) return false;
     if (!setupPickingShader()) return false;
-    if (!setupBoundingBoxShader()) return false;  // NUEVO
+    if (!setupBoundingBoxShader()) return false;
+    if (!setupNormalShader()) return false;  // NUEVO
+    if (!setupVertexShader()) return false;
     setupPickingFramebuffer();
-    setupBoundingBox();  // NUEVO
+    setupBoundingBox();
 
     if (width <= 0 || height <= 0)
     {
@@ -96,6 +120,27 @@ bool C3DViewer::setup()
 
 void C3DViewer::update()
 {
+    // Calcular FPS promedio en ventana deslizante (m_fpsWindowSeconds)
+    double now = glfwGetTime();
+    m_frameTimestamps.push_back(now);
+
+    // Eliminar timestamps anteriores a la ventana
+    while (!m_frameTimestamps.empty() && (now - m_frameTimestamps.front()) > m_fpsWindowSeconds)
+    {
+        m_frameTimestamps.pop_front();
+    }
+
+    // Calcular FPS: número de frames en ventana / duración real (mejor que dividir por ventana fija)
+    double span = m_frameTimestamps.empty() ? 0.0 : (m_frameTimestamps.back() - m_frameTimestamps.front());
+    if (span > 1e-6 && m_frameTimestamps.size() > 1)
+    {
+        m_fpsAverage = (double)(m_frameTimestamps.size() - 1) / span;
+    }
+    else
+    {
+        // Si no hay suficiente historial, aproximamos con el último delta si fuera posible
+        m_fpsAverage = 0.0;
+    }
 }
 
 void C3DViewer::mainLoop()
@@ -104,7 +149,8 @@ void C3DViewer::mainLoop()
     {
         glfwPollEvents();
 
-        glClearColor(0.15f, 0.15f, 0.2f, 1.0f);
+        // Usar color de fondo editable
+        glClearColor(m_backgroundColor.r, m_backgroundColor.g, m_backgroundColor.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         render();
@@ -121,7 +167,7 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
             glfwSetWindowShouldClose(m_window, GLFW_TRUE);
         else if (key == GLFW_KEY_O)
             loadOBJFile();
-        else if (key == GLFW_KEY_DELETE && m_selectedSubMesh >= 0)  // NUEVO
+        else if (key == GLFW_KEY_DELETE && m_selectedSubMesh >= 0)  
         {
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             if (m_selectedSubMesh < (int)subMeshes.size())
@@ -129,6 +175,8 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
                 subMeshes.erase(subMeshes.begin() + m_selectedSubMesh);
                 m_selectedSubMesh = -1;
                 assignPickingColors();
+                generateNormalLines();  
+                generateVertexPoints();
                 std::cout << "Sub-mesh eliminado" << std::endl;
             }
         }
@@ -178,10 +226,8 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
     }
 }
 
-// Modificada: Verificación de ImGui para evitar conflictos
 void C3DViewer::onCursorPos(double xpos, double ypos)
 {
-    // NUEVO: Verificar si ImGui capturó el evento
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) {
         m_lastMouseX = xpos;
@@ -222,9 +268,10 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
 
         if (m_selectedSubMesh >= 0)
         {
-            // Trasladar sub-mesh seleccionado
+            // Trasladar sub-mesh seleccionado (actualiza solo la propiedad, las VBOs no se re-subirán)
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             subMeshes[m_selectedSubMesh].translation += translation;
+            // No regeneramos VBOs: las normales y vértices se transformarán en el shader
         }
         else
         {
@@ -255,7 +302,9 @@ void C3DViewer::loadOBJFile()
         if (m_objLoader.load(filePath))
         {
             m_objLoaded = true;
-            assignPickingColors();  // NUEVO
+            assignPickingColors();
+            generateNormalLines();  // NUEVO
+            generateVertexPoints();
             std::cout << "OBJ cargado exitosamente" << std::endl;
         }
         else
@@ -265,7 +314,6 @@ void C3DViewer::loadOBJFile()
     }
 }
 
-// Modificada: Renderizado del bounding box
 void C3DViewer::renderOBJ()
 {
     if (!m_objLoaded) return;
@@ -293,29 +341,90 @@ void C3DViewer::renderOBJ()
     glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightColor"), 1, glm::value_ptr(lightColor));
 
     GLint modelLoc = glGetUniformLocation(m_shaderProgram, "model");
+    GLint objectColorLoc = glGetUniformLocation(m_shaderProgram, "objectColor");
 
-    for (size_t i = 0; i < m_objLoader.getSubMeshes().size(); ++i)
+    // 1) DIBUJAR RELLENO (si está activado) — aplicamos polygon offset para evitar z-fighting
+    if (m_showFill)
     {
-        const auto& subMesh = m_objLoader.getSubMeshes()[i];
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(m_fillPolygonOffsetFactor, m_fillPolygonOffsetUnits);
 
-        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
-        m_modelMatrix = subMeshTransform * baseModel;
+        for (size_t i = 0; i < m_objLoader.getSubMeshes().size(); ++i)
+        {
+            const auto& subMesh = m_objLoader.getSubMeshes()[i];
 
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
+            glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
+            m_modelMatrix = subMeshTransform * baseModel;
 
-        glm::vec3 color = subMesh.material.Kd;
-        glUniform3fv(glGetUniformLocation(m_shaderProgram, "objectColor"), 1, glm::value_ptr(color));
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
 
-        glBindVertexArray(subMesh.VAO);
-        glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
+            glm::vec3 color = subMesh.material.Kd;
+            glUniform3fv(objectColorLoc, 1, glm::value_ptr(color));
+
+            glBindVertexArray(subMesh.VAO);
+            glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
+            glBindVertexArray(0);
+        }
+
+        glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
-    // NUEVO: Renderizar bounding box del submesh seleccionado
+    // 2) DIBUJAR ALAMBRADO (si está activado) — dibujamos encima en modo LINE
+    if (m_showWireframe)
+    {
+        // Opcional: activar suavizado de líneas si está habilitado en la UI
+        if (m_lineAntiAlias)
+        {
+            glEnable(GL_LINE_SMOOTH);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+        }
+
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        glLineWidth(m_wireframeLineWidth);
+
+        for (size_t i = 0; i < m_objLoader.getSubMeshes().size(); ++i)
+        {
+            const auto& subMesh = m_objLoader.getSubMeshes()[i];
+
+            glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
+            m_modelMatrix = subMeshTransform * baseModel;
+
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
+            glUniform3fv(objectColorLoc, 1, glm::value_ptr(m_wireframeColor));
+
+            glBindVertexArray(subMesh.VAO);
+            glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
+            glBindVertexArray(0);
+        }
+
+        // Restaurar modo y estados
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glLineWidth(1.0f);
+
+        if (m_lineAntiAlias)
+        {
+            glDisable(GL_BLEND);
+            glDisable(GL_LINE_SMOOTH);
+        }
+    }
+
     if (m_selectedSubMesh >= 0 && m_selectedSubMesh < (int)m_objLoader.getSubMeshes().size())
     {
         const auto& selectedSubMesh = m_objLoader.getSubMeshes()[m_selectedSubMesh];
         renderBoundingBox(selectedSubMesh, baseModel);
+    }
+
+    if (m_showNormals)
+    {
+        renderNormals();
+    }
+
+    if (m_showVertices)
+    {
+        renderVertices();
     }
 }
 
@@ -337,8 +446,11 @@ void C3DViewer::drawInterface()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    ImGui::SetNextWindowSize(ImVec2(400, 600), ImGuiCond_Once);
-    ImGui::Begin("Control Panel");
+    ImGui::SetNextWindowSize(ImVec2(400, (float)height), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGuiWindowFlags panelFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    ImGui::Begin("Control Panel", nullptr, panelFlags);
 
     ImGui::Text("Presiona 'O' para cargar OBJ");
 
@@ -365,9 +477,139 @@ void C3DViewer::drawInterface()
         ImGui::Separator();
         ImGui::Text("Controles:");
         ImGui::BulletText("Click izq: Seleccionar sub-mesh");
-        ImGui::BulletText("Click medio + arrastrar: Trasladar");
-        ImGui::BulletText("Click der + arrastrar: Rotar");
-        ImGui::BulletText("Delete: Eliminar sub-mesh seleccionado");  // NUEVO
+        ImGui::BulletText("Click izq + arrastrar: Rotar");
+        ImGui::BulletText("Click der + arrastrar: Trasladar");
+        ImGui::BulletText("Delete: Eliminar sub-mesh seleccionado");
+
+        // Render: fondo, FPS, antialiasing, depth-test y culling
+        ImGui::Separator();
+        ImGui::Text("Viewport:");
+
+        if (ImGui::ColorEdit3("Color Fondo", &m_backgroundColor.x))
+        {
+            // se usa inmediatamente en el mainLoop
+        }
+
+        if (ImGui::Checkbox("Mostrar FPS (promedio 5s)", &m_showFPS))
+        {
+        }
+
+        if (m_showFPS)
+        {
+            ImGui::Text("FPS (media %.1fs): %.2f", m_fpsWindowSeconds, m_fpsAverage);
+        }
+
+        if (ImGui::Checkbox("Antialiasing de líneas", &m_lineAntiAlias))
+        {
+        }
+
+        // Depth test (z-buffer)
+        if (ImGui::Checkbox("Depth Test (Z-buffer)", &m_depthTestEnabled))
+        {
+            if (m_depthTestEnabled)
+                glEnable(GL_DEPTH_TEST);
+            else
+                glDisable(GL_DEPTH_TEST);
+        }
+
+        // Back-face culling
+        if (ImGui::Checkbox("Back-face Culling", &m_backfaceCullingEnabled))
+        {
+            if (m_backfaceCullingEnabled)
+            {
+                glEnable(GL_CULL_FACE);
+                glCullFace(m_cullFaceMode);
+            }
+            else
+            {
+                glDisable(GL_CULL_FACE);
+            }
+        }
+
+        // (Opcional) selector de cara a culling si está activo
+        if (m_backfaceCullingEnabled)
+        {
+            const char* items[] = { "BACK", "FRONT", "FRONT_AND_BACK" };
+            int current = (m_cullFaceMode == GL_BACK ? 0 : (m_cullFaceMode == GL_FRONT ? 1 : 2));
+            if (ImGui::Combo("Cull Face Mode", &current, items, IM_ARRAYSIZE(items)))
+            {
+                m_cullFaceMode = (current == 0) ? GL_BACK : (current == 1) ? GL_FRONT : GL_FRONT_AND_BACK;
+                glCullFace(m_cullFaceMode);
+            }
+        }
+
+        // Visualización: relleno / alambrado
+        ImGui::Separator();
+        ImGui::Text("Render:");
+        if (ImGui::Checkbox("Mostrar Relleno (triángulos)", &m_showFill))
+        {
+        }
+        if (ImGui::Checkbox("Mostrar Alambrado (wireframe)", &m_showWireframe))
+        {
+        }
+        if (m_showWireframe)
+        {
+            if (ImGui::ColorEdit3("Color Alambrado", &m_wireframeColor.x))
+            {
+            }
+            if (ImGui::SliderFloat("Grosor Alambrado", &m_wireframeLineWidth, 1.0f, 10.0f))
+            {
+            }
+        }
+        // Polygon offset para evitar z-fighting entre relleno y overlays (ej. lineas)
+        if (ImGui::CollapsingHeader("Polygon Offset (evitar z-fighting)", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::SliderFloat("Offset Factor", &m_fillPolygonOffsetFactor, 0.0f, 10.0f);
+            ImGui::SliderFloat("Offset Units", &m_fillPolygonOffsetUnits, 0.0f, 10.0f);
+        }
+
+        // visualización de normales
+        ImGui::Separator();
+        ImGui::Text("Visualizacion:");
+        if (ImGui::Checkbox("Mostrar Normales", &m_showNormals))
+        {
+            // Si se activa, asegúrate de tener las líneas generadas
+            if (m_showNormals)
+                generateNormalLines();
+        }
+
+        if (m_showNormals)
+        {
+            // Mostrar/ocultar normales por vértice
+            if (ImGui::Checkbox("Mostrar normales por vértice", &m_showNormalsPerVertex))
+            {
+                // Si activas, generamos líneas (si procede). Si desactivas, renderNormals no dibujará.
+                if (m_showNormalsPerVertex)
+                    generateNormalLines();
+            }
+
+            // Color editable para normales
+            if (ImGui::ColorEdit3("Color Normales", &m_normalColor.x))
+            {
+                // solo cambia uniform en render; no se requiere regenerar VBO
+            }
+
+            // Longitud como porcentaje de la diagonal world (0..100%)
+            float percent = m_normalLengthPercent * 100.0f;
+            if (ImGui::SliderFloat("Longitud Normales (%)", &percent, 0.0f, 100.0f))
+            {
+                m_normalLengthPercent = glm::clamp(percent / 100.0f, 0.0f, 1.0f);
+                generateNormalLines(); // regenerar porque la longitud local depende de este valor
+            }
+        }
+        if (ImGui::Checkbox("Mostrar Vertices", &m_showVertices))
+        {
+        }
+
+        if (m_showVertices)
+        {
+            if (ImGui::SliderFloat("Tamanio Vertices", &m_vertexSize, 1.0f, 20.0f))
+            {
+            }
+            if (ImGui::ColorEdit3("Color Vertices", &m_vertexColor.x))
+            {
+            }
+        }
 
         ImGui::Separator();
         ImGui::Text("Transformaciones del Objeto:");
@@ -400,7 +642,6 @@ void C3DViewer::drawInterface()
             }
         }
 
-        // NUEVO: Configuración de sub-mesh seleccionado
         if (m_selectedSubMesh >= 0 && m_selectedSubMesh < (int)m_objLoader.getSubMeshes().size())
         {
             ImGui::Separator();
@@ -410,6 +651,9 @@ void C3DViewer::drawInterface()
 
             if (ImGui::DragFloat3("Traslacion Sub-mesh", &selectedSM.translation.x, 0.01f))
             {
+                // regenerar buffers para que la UI actualice la posición de vértices y normales
+                generateVertexPoints();
+                generateNormalLines();
             }
 
             if (ImGui::ColorEdit3("Color Material (Kd)", &selectedSM.material.Kd.x))
@@ -421,6 +665,8 @@ void C3DViewer::drawInterface()
                 subMeshes.erase(subMeshes.begin() + m_selectedSubMesh);
                 m_selectedSubMesh = -1;
                 assignPickingColors();
+                generateNormalLines();  // Regenerar normales después de eliminar
+                generateVertexPoints();
                 std::cout << "Sub-mesh eliminado desde interfaz" << std::endl;
             }
 
@@ -434,7 +680,6 @@ void C3DViewer::drawInterface()
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
-
 void C3DViewer::resize(int new_width, int new_height)
 {
     // Evitar divisi?n por cero
@@ -786,4 +1031,275 @@ void C3DViewer::renderBoundingBox(const SubMesh& subMesh, const glm::mat4& baseM
     glBindVertexArray(0);
 
     glEnable(GL_DEPTH_TEST);
+}
+
+bool C3DViewer::setupNormalShader()
+{
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &normalVertexShaderSrc, nullptr);
+    glCompileShader(vertexShader);
+    if (!checkCompileErrors(vertexShader, "NORMAL_VERTEX")) return false;
+
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &normalFragmentShaderSrc, nullptr);
+    glCompileShader(fragmentShader);
+    if (!checkCompileErrors(fragmentShader, "NORMAL_FRAGMENT")) return false;
+
+    m_normalShaderProgram = glCreateProgram();
+    glAttachShader(m_normalShaderProgram, vertexShader);
+    glAttachShader(m_normalShaderProgram, fragmentShader);
+    glLinkProgram(m_normalShaderProgram);
+    if (!checkCompileErrors(m_normalShaderProgram, "NORMAL_PROGRAM")) return false;
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+    return true;
+}
+
+void C3DViewer::generateNormalLines()
+{
+    m_normalLines.clear();
+    m_normalOffsets.clear();
+    m_normalCounts.clear();
+
+    // Matrices base (igual que en render)
+    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
+    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
+    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
+
+    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
+    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
+    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
+
+    const auto& subMeshes = m_objLoader.getSubMeshes();
+    for (size_t si = 0; si < subMeshes.size(); ++si)
+    {
+        const auto& subMesh = subMeshes[si];
+
+        int offset = (int)m_normalLines.size();
+        int count = 0;
+
+        // bounding box en local
+        glm::vec3 minB, maxB;
+        calculateSubMeshBounds(subMesh, minB, maxB);
+
+        // modelo que lleva coordenadas locales a mundo para este sub-mesh
+        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
+        glm::mat4 modelForWorld = subMeshTransform * baseModel;
+
+        // diagonal en coordenadas mundo
+        glm::vec3 worldMin = glm::vec3(modelForWorld * glm::vec4(minB, 1.0f));
+        glm::vec3 worldMax = glm::vec3(modelForWorld * glm::vec4(maxB, 1.0f));
+        float diagonalWorld = glm::length(worldMax - worldMin);
+
+        // longitud deseada en mundo
+        float Lw = diagonalWorld * m_normalLengthPercent;
+
+        // mat3 del modelo (sin traslación) para convertir vectores normales a mundo
+        glm::mat3 model3 = glm::mat3(modelForWorld);
+
+        for (size_t i = 0; i < subMesh.vertices.size(); ++i)
+        {
+            if (i < subMesh.normals.size())
+            {
+                glm::vec3 v = subMesh.vertices[i];      // local coords
+                glm::vec3 n = glm::normalize(subMesh.normals[i]);
+
+                // longitud local tal que, tras aplicar model3, la longitud en mundo sea Lw:
+                float scaleAlongN = glm::length(model3 * n);
+                float Ln = (scaleAlongN > 1e-6f) ? (Lw / scaleAlongN) : 0.0f;
+
+                m_normalLines.push_back(v);
+                m_normalLines.push_back(v + n * Ln);
+                count += 2;
+            }
+        }
+
+        m_normalOffsets.push_back(offset);
+        m_normalCounts.push_back(count);
+    }
+
+    // Subir VBO (datos en espacio local)
+    if (m_normalVAO == 0)
+    {
+        glGenVertexArrays(1, &m_normalVAO);
+        glGenBuffers(1, &m_normalVBO);
+    }
+
+    glBindVertexArray(m_normalVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_normalVBO);
+    glBufferData(GL_ARRAY_BUFFER, m_normalLines.size() * sizeof(glm::vec3),
+        m_normalLines.data(), GL_DYNAMIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glBindVertexArray(0);
+
+    std::cout << "Generadas " << m_normalLines.size() / 2 << " líneas de normales (por sub-mesh: " << m_normalCounts.size() << ")" << std::endl;
+}
+
+void C3DViewer::generateVertexPoints()
+{
+    m_vertexPoints.clear();
+    m_vertexOffsets.clear();
+    m_vertexCounts.clear();
+
+    for (const auto& subMesh : m_objLoader.getSubMeshes())
+    {
+        int offset = (int)m_vertexPoints.size();
+        int count = 0;
+
+        for (const auto& vertex : subMesh.vertices)
+        {
+            m_vertexPoints.push_back(vertex); // en espacio local, sin aplicar translation
+            ++count;
+        }
+
+        m_vertexOffsets.push_back(offset);
+        m_vertexCounts.push_back(count);
+    }
+
+    if (m_vertexVAO == 0)
+    {
+        glGenVertexArrays(1, &m_vertexVAO);
+        glGenBuffers(1, &m_vertexVBO);
+    }
+
+    glBindVertexArray(m_vertexVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_vertexVBO);
+    glBufferData(GL_ARRAY_BUFFER, m_vertexPoints.size() * sizeof(glm::vec3),
+        m_vertexPoints.data(), GL_DYNAMIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glBindVertexArray(0);
+
+    std::cout << "Generados " << m_vertexPoints.size() << " puntos de vertices (por sub-mesh: " << m_vertexCounts.size() << ")" << std::endl;
+}
+
+bool C3DViewer::setupVertexShader()
+{
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &vertexPointVertexShaderSrc, nullptr);
+    glCompileShader(vertexShader);
+    if (!checkCompileErrors(vertexShader, "VERTEX_POINT_VERTEX")) return false;
+
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &vertexPointFragmentShaderSrc, nullptr);
+    glCompileShader(fragmentShader);
+    if (!checkCompileErrors(fragmentShader, "VERTEX_POINT_FRAGMENT")) return false;
+
+    m_vertexShaderProgram = glCreateProgram();
+    glAttachShader(m_vertexShaderProgram, vertexShader);
+    glAttachShader(m_vertexShaderProgram, fragmentShader);
+    glLinkProgram(m_vertexShaderProgram);
+    if (!checkCompileErrors(m_vertexShaderProgram, "VERTEX_POINT_PROGRAM")) return false;
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+    return true;
+}
+
+void C3DViewer::renderVertices()
+{
+    if (m_vertexPoints.empty()) return;
+
+    glUseProgram(m_vertexShaderProgram);
+
+    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
+    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
+    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
+
+    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
+    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
+    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
+
+    GLint viewLoc = glGetUniformLocation(m_vertexShaderProgram, "view");
+    GLint projLoc = glGetUniformLocation(m_vertexShaderProgram, "projection");
+    GLint modelLoc = glGetUniformLocation(m_vertexShaderProgram, "model");
+    GLint colorLoc = glGetUniformLocation(m_vertexShaderProgram, "vertexColor");
+
+    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
+    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
+    glUniform3fv(colorLoc, 1, glm::value_ptr(m_vertexColor));
+
+    glPointSize(m_vertexSize);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+
+    glBindVertexArray(m_vertexVAO);
+
+    const auto& subMeshes = m_objLoader.getSubMeshes();
+    for (size_t i = 0; i < subMeshes.size(); ++i)
+    {
+        int offset = m_vertexOffsets[i];
+        int count = m_vertexCounts[i];
+        if (count <= 0) continue;
+
+        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMeshes[i].translation);
+        glm::mat4 model = subMeshTransform * baseModel;
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+
+        glDrawArrays(GL_POINTS, offset, count);
+    }
+
+    glBindVertexArray(0);
+
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+}
+
+void C3DViewer::renderNormals()
+{
+    if (m_normalLines.empty() || !m_showNormals || !m_showNormalsPerVertex) return;
+
+    glUseProgram(m_normalShaderProgram);
+
+    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
+    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
+    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
+
+    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
+    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
+    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
+
+    GLint viewLoc = glGetUniformLocation(m_normalShaderProgram, "view");
+    GLint projLoc = glGetUniformLocation(m_normalShaderProgram, "projection");
+    GLint modelLoc = glGetUniformLocation(m_normalShaderProgram, "model");
+    GLint colorLoc = glGetUniformLocation(m_normalShaderProgram, "normalColor");
+
+    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
+    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
+    glUniform3fv(colorLoc, 1, glm::value_ptr(m_normalColor));
+
+    // Antialiasing de líneas (opcional)
+    if (m_lineAntiAlias)
+    {
+        glEnable(GL_LINE_SMOOTH);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+    }
+
+    glBindVertexArray(m_normalVAO);
+
+    const auto& subMeshes = m_objLoader.getSubMeshes();
+    for (size_t i = 0; i < subMeshes.size(); ++i)
+    {
+        int offset = m_normalOffsets[i];
+        int count = m_normalCounts[i];
+        if (count <= 0) continue;
+
+        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMeshes[i].translation);
+        glm::mat4 model = subMeshTransform * baseModel;
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+
+        glDrawArrays(GL_LINES, offset, count);
+    }
+
+    glBindVertexArray(0);
 }
