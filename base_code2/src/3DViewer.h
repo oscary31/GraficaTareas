@@ -167,7 +167,6 @@ protected:
     bool m_showFill = true;                     // mostrar relleno de triángulos
     bool m_showWireframe = false;               // mostrar alambrado
     glm::vec3 m_wireframeColor = glm::vec3(0.0f, 0.0f, 0.0f); // color del alambrado (negro por defecto)
-    float m_wireframeLineWidth = 1.0f;          // grosor del alambrado
 
     // Parámetros para evitar z-fighting (se usan cuando se dibuja relleno)
     float m_fillPolygonOffsetFactor = 1.0f;

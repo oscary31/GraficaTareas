@@ -437,7 +437,7 @@ void C3DViewer::renderOBJ()
     // 2) DIBUJAR ALAMBRADO (si está activado) — dibujamos encima en modo LINE
     if (m_showWireframe)
     {
-        // Opcional: activar suavizado de líneas si está habilitado en la UI
+        // Antialiasing de líneas (opcional)
         if (m_lineAntiAlias)
         {
             glEnable(GL_LINE_SMOOTH);
@@ -446,8 +446,27 @@ void C3DViewer::renderOBJ()
             glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
         }
 
+        // Guardar estados previos
+        GLboolean prevCull = glIsEnabled(GL_CULL_FACE);
+        GLboolean prevDepth = glIsEnabled(GL_DEPTH_TEST);
+
+        if (!m_showFill)
+        {
+            // Sin relleno: queremos ver TODAS las aristas (incluso las "ocultas")
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_DEPTH_TEST);
+        }
+        else
+        {
+            // Con relleno: respetar ocultación (depth-test) y culling según la configuración del usuario
+            if (m_depthTestEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+            if (m_backfaceCullingEnabled) { glEnable(GL_CULL_FACE); glCullFace(m_cullFaceMode); }
+            else glDisable(GL_CULL_FACE);
+            // Nota: el relleno ya se dibujó antes (con polygon offset si estaba activado),
+            // por tanto las líneas se verán correctamente respecto a ese fill.
+        }
+
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        glLineWidth(m_wireframeLineWidth);
 
         for (size_t i = 0; i < m_objLoader.getSubMeshes().size(); ++i)
         {
@@ -467,6 +486,11 @@ void C3DViewer::renderOBJ()
         // Restaurar modo y estados
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glLineWidth(1.0f);
+
+        // Restaurar depth-test y culling al estado previo
+        if (prevDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        if (prevCull) { glEnable(GL_CULL_FACE); glCullFace(m_cullFaceMode); }
+        else glDisable(GL_CULL_FACE);
 
         if (m_lineAntiAlias)
         {
@@ -543,14 +567,15 @@ void C3DViewer::drawInterface()
     {
         loadOBJFile();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Guardar OBJ modificado"))
-    {
-        saveOBJFile();
-    }
+   
 
     if (m_objLoaded)
-    {
+    { 
+        ImGui::SameLine();
+        if (ImGui::Button("Guardar OBJ modificado"))
+        {
+            saveOBJFile();
+        }
         ImGui::Separator();
         ImGui::Text("OBJ Cargado");
         ImGui::Text("Submeshes: %zu", m_objLoader.getSubMeshes().size());
@@ -573,12 +598,7 @@ void C3DViewer::drawInterface()
 
         // Render: fondo, FPS, antialiasing, depth-test y culling
         ImGui::Separator();
-        ImGui::Text("Viewport:");
-
-        if (ImGui::ColorEdit3("Color Fondo", &m_backgroundColor.x))
-        {
-            // se usa inmediatamente en el mainLoop
-        }
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Escena:");
 
         if (ImGui::Checkbox("Mostrar FPS (promedio 5s)", &m_showFPS))
         {
@@ -589,9 +609,16 @@ void C3DViewer::drawInterface()
             ImGui::Text("FPS (media %.1fs): %.2f", m_fpsWindowSeconds, m_fpsAverage);
         }
 
-        if (ImGui::Checkbox("Antialiasing de líneas", &m_lineAntiAlias))
+        if (ImGui::Checkbox("Antialiasing", &m_lineAntiAlias))
         {
         }
+
+        if (ImGui::ColorEdit3("Color Fondo", &m_backgroundColor.x))
+        {
+        }
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Render:");
 
         // Depth test (z-buffer)
         if (ImGui::Checkbox("Depth Test (Z-buffer)", &m_depthTestEnabled))
@@ -616,25 +643,11 @@ void C3DViewer::drawInterface()
             }
         }
 
-        // (Opcional) selector de cara a culling si está activo
-        if (m_backfaceCullingEnabled)
-        {
-            const char* items[] = { "BACK", "FRONT", "FRONT_AND_BACK" };
-            int current = (m_cullFaceMode == GL_BACK ? 0 : (m_cullFaceMode == GL_FRONT ? 1 : 2));
-            if (ImGui::Combo("Cull Face Mode", &current, items, IM_ARRAYSIZE(items)))
-            {
-                m_cullFaceMode = (current == 0) ? GL_BACK : (current == 1) ? GL_FRONT : GL_FRONT_AND_BACK;
-                glCullFace(m_cullFaceMode);
-            }
-        }
-
-        // Visualización: relleno / alambrado
-        ImGui::Separator();
-        ImGui::Text("Render:");
-        if (ImGui::Checkbox("Mostrar Relleno (triángulos)", &m_showFill))
+        //relleno / alambrado
+        if (ImGui::Checkbox("Mostrar Relleno", &m_showFill))
         {
         }
-        if (ImGui::Checkbox("Mostrar Alambrado (wireframe)", &m_showWireframe))
+        if (ImGui::Checkbox("Mostrar Alambrado", &m_showWireframe))
         {
         }
         if (m_showWireframe)
@@ -642,44 +655,28 @@ void C3DViewer::drawInterface()
             if (ImGui::ColorEdit3("Color Alambrado", &m_wireframeColor.x))
             {
             }
-            if (ImGui::SliderFloat("Grosor Alambrado", &m_wireframeLineWidth, 1.0f, 10.0f))
-            {
-            }
+            
         }
-        //// Polygon offset para evitar z-fighting entre relleno y overlays (ej. lineas)
-        //if (ImGui::CollapsingHeader("Polygon Offset (evitar z-fighting)", ImGuiTreeNodeFlags_DefaultOpen))
-        //{
-        //    ImGui::SliderFloat("Offset Factor", &m_fillPolygonOffsetFactor, 0.0f, 10.0f);
-        //    ImGui::SliderFloat("Offset Units", &m_fillPolygonOffsetUnits, 0.0f, 10.0f);
-        //}
 
         // visualización de normales
         ImGui::Separator();
-        ImGui::Text("Visualizacion:");
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Geometria:");
+
         if (ImGui::Checkbox("Mostrar Normales", &m_showNormals))
         {
-            // Si se activa, asegúrate de tener las líneas generadas
+            // tener las líneas generadas
             if (m_showNormals)
                 generateNormalLines();
         }
 
         if (m_showNormals)
         {
-            // Mostrar/ocultar normales por vértice
-            if (ImGui::Checkbox("Mostrar normales por vértice", &m_showNormalsPerVertex))
-            {
-                // Si activas, generamos líneas (si procede). Si desactivas, renderNormals no dibujará.
-                if (m_showNormalsPerVertex)
-                    generateNormalLines();
-            }
-
             // Color editable para normales
             if (ImGui::ColorEdit3("Color Normales", &m_normalColor.x))
             {
-                // solo cambia uniform en render; no se requiere regenerar VBO
             }
 
-            // Longitud como porcentaje de la diagonal world (0..100%)
+            // Longitud como porcentaje 
             float percent = m_normalLengthPercent * 100.0f;
             if (ImGui::SliderFloat("Longitud Normales (%)", &percent, 0.0f, 100.0f))
             {
@@ -702,7 +699,8 @@ void C3DViewer::drawInterface()
         }
 
         ImGui::Separator();
-        ImGui::Text("Transformaciones del Objeto:");
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Transformaciones del Objeto:");
+
 
         if (ImGui::DragFloat3("Traslacion##obj", &m_objectTranslation.x, 0.01f))
         {
@@ -716,6 +714,18 @@ void C3DViewer::drawInterface()
         if (ImGui::DragFloat3("Rotacion (grados)##obj", &eulerAngles.x, 1.0f))
         {
             m_objectRotation = glm::quat(glm::radians(eulerAngles));
+        }
+
+        if (ImGui::Button("Centrar sub-mallas"))
+        {
+            m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
+            m_selectedSubMesh = -1;
+
+            auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
+            for (auto& sm : subMeshes)
+            {
+                sm.translation = glm::vec3(0.0f);
+            }
         }
 
         if (ImGui::Button("Resetear Transformaciones"))
@@ -735,7 +745,7 @@ void C3DViewer::drawInterface()
         if (m_selectedSubMesh >= 0 && m_selectedSubMesh < (int)m_objLoader.getSubMeshes().size())
         {
             ImGui::Separator();
-            ImGui::Text("Sub-mesh Seleccionado: %d", m_selectedSubMesh);
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Sub-mesh seleccionado:");
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             auto& selectedSM = subMeshes[m_selectedSubMesh];
 
@@ -746,7 +756,7 @@ void C3DViewer::drawInterface()
                 generateNormalLines();
             }
 
-            if (ImGui::ColorEdit3("Color Material (Kd)", &selectedSM.material.Kd.x))
+            if (ImGui::ColorEdit3("Color Material", &selectedSM.material.Kd.x))
             {
             }
 
@@ -779,7 +789,7 @@ void C3DViewer::resize(int new_width, int new_height)
             << new_width << "x" << new_height << "), ignorando resize" << std::endl;
         return;
     }
-    // Establecer dimensiones m?nimas
+    // Establecer dimensiones minimas
     width = std::max(1, new_width);
     height = std::max(1, new_height);
 
@@ -788,7 +798,7 @@ void C3DViewer::resize(int new_width, int new_height)
         (float)width / (float)height,
         0.1f, 100.0f);
 
-    // Recrear framebuffer de picking con nuevo tama?o
+    // Recrear framebuffer de picking con nuevo tamanio
     if (m_pickingFBO)
     {
         glDeleteFramebuffers(1, &m_pickingFBO);
@@ -873,7 +883,7 @@ void C3DViewer::cursorPosCallbackStatic(GLFWwindow* window, double xpos, double 
 
 void C3DViewer::setupPickingFramebuffer()
 {
-    // VALIDACI?N: No crear framebuffer con dimensiones inv?lidas
+    // No crear framebuffer con dimensiones invalidas
     if (width <= 0 || height <= 0)
     {
         std::cerr << "Error: No se puede crear framebuffer con dimensiones "
@@ -933,7 +943,7 @@ void C3DViewer::renderForPicking()
     GLint modelLoc = glGetUniformLocation(m_pickingShaderProgram, "model");
     GLint colorLoc = glGetUniformLocation(m_pickingShaderProgram, "pickingColor");
 
-    // Renderizar cada submesh con su color ?nico
+    // Renderizar cada submesh con su color unico
     for (const auto& subMesh : m_objLoader.getSubMeshes())
     {
         glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
@@ -956,7 +966,7 @@ int C3DViewer::performPicking(int mouseX, int mouseY)
 
     glBindFramebuffer(GL_FRAMEBUFFER, m_pickingFBO);
 
-    // Leer pixel en posici?n del mouse (invertir Y)
+    // Leer pixel en posicion del mouse (invertir Y)
     unsigned char pixel[3];
     glReadPixels(mouseX, height - mouseY, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, pixel);
 
@@ -1449,7 +1459,7 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
 
     // Escribir referencia al MTL
     objFile << "# Exportado por OBJ Viewer\n";
-    // Obtener solo el nombre de fichero del .mtl (evita dependencia de std::filesystem)
+    // Obtener solo el nombre de fichero del .mtl 
     std::string mtlFilename;
     size_t slash = mtlPath.find_last_of("/\\");
     if (slash != std::string::npos)
@@ -1467,7 +1477,7 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
     glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
     glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
 
-    // Colecciones globales para índices
+    // Colecciones globales para indices
     size_t vertexOffset = 0;
     size_t normalOffset = 0;
 
@@ -1486,7 +1496,7 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
         mtlFile << "Ns 10.0\n\n";
     }
 
-    // Ahora escribir vértices/normales y caras en OBJ — mantendremos indices globales
+    // Ahora escribir vertices/normales y caras en OBJ — mantendremos indices globales
     // Primero, recorrer sub-meshes y volcar vértices y normales transformados (en orden)
     std::vector<glm::vec3> allNormals; allNormals.reserve(1024);
     for (size_t i = 0; i < subMeshes.size(); ++i)
