@@ -1,7 +1,8 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "3DViewer.h"
 #include <iostream>
-
+#include <cmath> 
+//#include <filesystem>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include "tinyfiledialogs.h"
@@ -112,7 +113,16 @@ bool C3DViewer::setup()
     m_projectionMatrix = glm::perspective(glm::radians(45.0f),
         (float)width / (float)height,
         0.1f, 100.0f);
-    m_viewMatrix = glm::lookAt(m_cameraPos, m_cameraTarget, m_cameraUp);
+
+    // Inicializar vectores de cámara a partir de posición/target actuales
+    m_cameraFront = glm::normalize(m_cameraTarget - m_cameraPos);
+    // Derivar yaw/pitch desde front
+    m_cameraYaw = glm::degrees(std::atan2(m_cameraFront.z, m_cameraFront.x));
+    m_cameraPitch = glm::degrees(std::asin(glm::clamp(m_cameraFront.y, -1.0f, 1.0f)));
+    m_worldUp = m_cameraUp;
+    computeCameraVectors();
+    updateViewMatrix();
+
     m_modelMatrix = glm::mat4(1.0f);
 
     return true;
@@ -161,13 +171,14 @@ void C3DViewer::mainLoop()
 
 void C3DViewer::onKey(int key, int scancode, int action, int mods)
 {
-    if (action == GLFW_PRESS)
+    // aceptar press y repeat para movimiento continuo
+    if (action == GLFW_PRESS || action == GLFW_REPEAT)
     {
         if (key == GLFW_KEY_ESCAPE)
             glfwSetWindowShouldClose(m_window, GLFW_TRUE);
         else if (key == GLFW_KEY_O)
             loadOBJFile();
-        else if (key == GLFW_KEY_DELETE && m_selectedSubMesh >= 0)  
+        else if (key == GLFW_KEY_DELETE && m_selectedSubMesh >= 0)
         {
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             if (m_selectedSubMesh < (int)subMeshes.size())
@@ -175,10 +186,40 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
                 subMeshes.erase(subMeshes.begin() + m_selectedSubMesh);
                 m_selectedSubMesh = -1;
                 assignPickingColors();
-                generateNormalLines();  
+                generateNormalLines();
                 generateVertexPoints();
                 std::cout << "Sub-mesh eliminado" << std::endl;
             }
+        }
+        // MOVIMIENTO CAMERA - adelante / atras en dirección front (UP / DOWN)
+        else if (key == GLFW_KEY_UP)
+        {
+            glm::vec3 delta = m_cameraFront * m_cameraSpeed;
+            m_cameraPos += delta;
+            m_cameraTarget += delta;
+            updateViewMatrix();
+        }
+        else if (key == GLFW_KEY_DOWN)
+        {
+            glm::vec3 delta = m_cameraFront * m_cameraSpeed;
+            m_cameraPos -= delta;
+            m_cameraTarget -= delta;
+            updateViewMatrix();
+        }
+        // ROTACION CAMERA con teclas LEFT/RIGHT (gira yaw)
+        else if (key == GLFW_KEY_LEFT)
+        {
+            float step = 5.0f; // grados por pulsación
+            m_cameraYaw -= step;
+            computeCameraVectors();
+            updateViewMatrix();
+        }
+        else if (key == GLFW_KEY_RIGHT)
+        {
+            float step = 5.0f;
+            m_cameraYaw += step;
+            computeCameraVectors();
+            updateViewMatrix();
         }
     }
 }
@@ -235,48 +276,71 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
         return;
     }
 
-    if (!m_objLoaded) return;
-
+    // Si no hay objeto cargado o aunque lo haya, permitimos mirar con botón central
     double deltaX = xpos - m_lastMouseX;
     double deltaY = ypos - m_lastMouseY;
 
-    if (mouseButtonsDown[GLFW_MOUSE_BUTTON_LEFT])
+    // Si mantienes pulsado botón izquierdo el código existente rota el objeto;
+    // si mantienes pulsado botón medio (wheel) rotamos la cámara (mouse-look)
+    if (mouseButtonsDown[GLFW_MOUSE_BUTTON_MIDDLE] && m_mouseLookEnabled)
     {
         m_isDragging = true;
+        // sensibilidad: grados por pixel
+        float sx = static_cast<float>(deltaX) * m_mouseSensitivity;
+        float sy = static_cast<float>(deltaY) * m_mouseSensitivity;
 
-        float sensitivity = 0.005f;
-        float angleX = static_cast<float>(deltaY) * sensitivity;
-        float angleY = static_cast<float>(deltaX) * sensitivity;
+        // Yaw aumenta con movimiento X, pitch decrece con movimiento Y (invertido)
+        m_cameraYaw += sx;
+        m_cameraPitch -= sy;
 
-        glm::quat qx = glm::angleAxis(angleX, glm::vec3(1.0f, 0.0f, 0.0f));
-        glm::quat qy = glm::angleAxis(angleY, glm::vec3(0.0f, 1.0f, 0.0f));
+        // limitar pitch para evitar flip
+        if (m_cameraPitch > 89.0f) m_cameraPitch = 89.0f;
+        if (m_cameraPitch < -89.0f) m_cameraPitch = -89.0f;
 
-        m_objectRotation = qy * qx * m_objectRotation;
-        m_objectRotation = glm::normalize(m_objectRotation);
+        computeCameraVectors();
+        updateViewMatrix();
     }
-
-    if (mouseButtonsDown[GLFW_MOUSE_BUTTON_RIGHT])
+    else
     {
-        m_isDragging = true;
-
-        float sensitivity = 0.002f;
-        glm::vec3 translation(
-            static_cast<float>(deltaX) * sensitivity,
-            static_cast<float>(-deltaY) * sensitivity,
-            0.0f
-        );
-
-        if (m_selectedSubMesh >= 0)
+        // Mantener comportamiento previo para rotar/trasladar objeto
+        if (mouseButtonsDown[GLFW_MOUSE_BUTTON_LEFT])
         {
-            // Trasladar sub-mesh seleccionado (actualiza solo la propiedad, las VBOs no se re-subirán)
-            auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
-            subMeshes[m_selectedSubMesh].translation += translation;
-            // No regeneramos VBOs: las normales y vértices se transformarán en el shader
+            m_isDragging = true;
+
+            float sensitivity = 0.005f;
+            float angleX = static_cast<float>(deltaY) * sensitivity;
+            float angleY = static_cast<float>(deltaX) * sensitivity;
+
+            glm::quat qx = glm::angleAxis(angleX, glm::vec3(1.0f, 0.0f, 0.0f));
+            glm::quat qy = glm::angleAxis(angleY, glm::vec3(0.0f, 1.0f, 0.0f));
+
+            m_objectRotation = qy * qx * m_objectRotation;
+            m_objectRotation = glm::normalize(m_objectRotation);
         }
-        else
+
+        if (mouseButtonsDown[GLFW_MOUSE_BUTTON_RIGHT])
         {
-            // Trasladar objeto completo
-            m_objectTranslation += translation;
+            m_isDragging = true;
+
+            float sensitivity = 0.002f;
+            glm::vec3 translation(
+                static_cast<float>(deltaX) * sensitivity,
+                static_cast<float>(-deltaY) * sensitivity,
+                0.0f
+            );
+
+            if (m_selectedSubMesh >= 0)
+            {
+                // Trasladar sub-mesh seleccionado (actualiza solo la propiedad, las VBOs no se re-subirán)
+                auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
+                subMeshes[m_selectedSubMesh].translation += translation;
+                // No regeneramos VBOs: las normales y vértices se transformarán en el shader
+            }
+            else
+            {
+                // Trasladar objeto completo
+                m_objectTranslation += translation;
+            }
         }
     }
 
@@ -428,6 +492,27 @@ void C3DViewer::renderOBJ()
     }
 }
 
+void C3DViewer::computeCameraVectors()
+{
+    // Convertir yaw/pitch (grados) a vector front
+    glm::vec3 front;
+    front.x = std::cos(glm::radians(m_cameraYaw)) * std::cos(glm::radians(m_cameraPitch));
+    front.y = std::sin(glm::radians(m_cameraPitch));
+    front.z = std::sin(glm::radians(m_cameraYaw)) * std::cos(glm::radians(m_cameraPitch));
+    m_cameraFront = glm::normalize(front);
+
+    // right y up
+    m_cameraRight = glm::normalize(glm::cross(m_cameraFront, m_worldUp));
+    m_cameraUp = glm::normalize(glm::cross(m_cameraRight, m_cameraFront));
+    // actualizar target coherente
+    m_cameraTarget = m_cameraPos + m_cameraFront;
+}
+
+void C3DViewer::updateViewMatrix()
+{
+    m_viewMatrix = glm::lookAt(m_cameraPos, m_cameraPos + m_cameraFront, m_cameraUp);
+}
+
 void C3DViewer::render()
 {
     update();
@@ -457,6 +542,11 @@ void C3DViewer::drawInterface()
     if (ImGui::Button("Abrir archivo OBJ"))
     {
         loadOBJFile();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Guardar OBJ modificado"))
+    {
+        saveOBJFile();
     }
 
     if (m_objLoaded)
@@ -556,12 +646,12 @@ void C3DViewer::drawInterface()
             {
             }
         }
-        // Polygon offset para evitar z-fighting entre relleno y overlays (ej. lineas)
-        if (ImGui::CollapsingHeader("Polygon Offset (evitar z-fighting)", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::SliderFloat("Offset Factor", &m_fillPolygonOffsetFactor, 0.0f, 10.0f);
-            ImGui::SliderFloat("Offset Units", &m_fillPolygonOffsetUnits, 0.0f, 10.0f);
-        }
+        //// Polygon offset para evitar z-fighting entre relleno y overlays (ej. lineas)
+        //if (ImGui::CollapsingHeader("Polygon Offset (evitar z-fighting)", ImGuiTreeNodeFlags_DefaultOpen))
+        //{
+        //    ImGui::SliderFloat("Offset Factor", &m_fillPolygonOffsetFactor, 0.0f, 10.0f);
+        //    ImGui::SliderFloat("Offset Units", &m_fillPolygonOffsetUnits, 0.0f, 10.0f);
+        //}
 
         // visualización de normales
         ImGui::Separator();
@@ -1302,4 +1392,194 @@ void C3DViewer::renderNormals()
     }
 
     glBindVertexArray(0);
+}
+
+void C3DViewer::saveOBJFile()
+{
+    const char* filterPatterns[1] = { "*.obj" };
+    const char* filePath = tinyfd_saveFileDialog(
+        "Guardar OBJ modificado",
+        "modified.obj",
+        1,
+        filterPatterns,
+        "Archivos OBJ (*.obj)"
+    );
+
+    if (filePath)
+    {
+        std::string path(filePath);
+        if (saveOBJWithMTL(path))
+        {
+            std::cout << "OBJ guardado en: " << path << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error al guardar OBJ en: " << path << std::endl;
+        }
+    }
+}
+
+bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
+{
+    if (!m_objLoaded) {
+        std::cerr << "No hay OBJ cargado para exportar." << std::endl;
+        return false;
+    }
+
+    // Derivar ruta .mtl
+    std::string mtlPath = objPath;
+    size_t dot = mtlPath.find_last_of('.');
+    if (dot != std::string::npos)
+        mtlPath = mtlPath.substr(0, dot) + ".mtl";
+    else
+        mtlPath += ".mtl";
+
+    std::ofstream mtlFile(mtlPath, std::ios::out);
+    if (!mtlFile.is_open()) {
+        std::cerr << "No se pudo abrir MTL para escritura: " << mtlPath << std::endl;
+        return false;
+    }
+
+    std::ofstream objFile(objPath, std::ios::out);
+    if (!objFile.is_open()) {
+        std::cerr << "No se pudo abrir OBJ para escritura: " << objPath << std::endl;
+        mtlFile.close();
+        return false;
+    }
+
+    // Escribir referencia al MTL
+    objFile << "# Exportado por OBJ Viewer\n";
+    // Obtener solo el nombre de fichero del .mtl (evita dependencia de std::filesystem)
+    std::string mtlFilename;
+    size_t slash = mtlPath.find_last_of("/\\");
+    if (slash != std::string::npos)
+        mtlFilename = mtlPath.substr(slash + 1);
+    else
+        mtlFilename = mtlPath;
+    objFile << "mtllib " << mtlFilename << "\n";
+
+    // Preparar matrices globales (aplicar las mismas transformaciones que en render)
+    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
+    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
+    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
+
+    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
+    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
+    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
+
+    // Colecciones globales para índices
+    size_t vertexOffset = 0;
+    size_t normalOffset = 0;
+
+    // Guardar materiales en MTL (uno por sub-mesh)
+    const auto& subMeshes = m_objLoader.getSubMeshes();
+    for (size_t i = 0; i < subMeshes.size(); ++i)
+    {
+        const auto& sm = subMeshes[i];
+        std::string matName = "mat_" + std::to_string(i);
+        mtlFile << "newmtl " << matName << "\n";
+        // Kd (difuso) — usar color actual del submesh
+        mtlFile << "Kd " << std::fixed << std::setprecision(6)
+            << sm.material.Kd.r << " " << sm.material.Kd.g << " " << sm.material.Kd.b << "\n";
+        mtlFile << "Ka 0.000000 0.000000 0.000000\n";
+        mtlFile << "Ks 0.100000 0.100000 0.100000\n";
+        mtlFile << "Ns 10.0\n\n";
+    }
+
+    // Ahora escribir vértices/normales y caras en OBJ — mantendremos indices globales
+    // Primero, recorrer sub-meshes y volcar vértices y normales transformados (en orden)
+    std::vector<glm::vec3> allNormals; allNormals.reserve(1024);
+    for (size_t i = 0; i < subMeshes.size(); ++i)
+    {
+        const auto& sm = subMeshes[i];
+        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), sm.translation);
+        // Ahora escribir vértices/normales y caras en OBJ — mantendremos indices globales
+// Primero, recorrer sub-meshes y volcar vértices y normales transformados (en orden)
+        std::vector<glm::vec3> allNormals; allNormals.reserve(1024);
+        for (size_t i = 0; i < subMeshes.size(); ++i)
+        {
+            const auto& sm = subMeshes[i];
+            glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), sm.translation);
+
+            // CORRECCIÓN: aplicar primero las transformaciones globales del objeto (baseModel)
+            // y luego la traslación local del sub-mesh. Así el vértice final = baseModel * subMeshTransform * v_local
+            glm::mat4 model = baseModel * subMeshTransform;
+
+            // mat3 para normales (inv-transpose) basada en la misma matriz 'model'
+            glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(model)));
+
+            // vértices (transformados — baked)
+            for (const auto& v : sm.vertices)
+            {
+                glm::vec4 vt = model * glm::vec4(v, 1.0f);
+                objFile << "v " << std::fixed << std::setprecision(6)
+                    << vt.x << " " << vt.y << " " << vt.z << "\n";
+            }
+
+            // normales (si existen en el submesh) — también transformadas y normalizadas
+            if (!sm.normals.empty())
+            {
+                for (const auto& n : sm.normals)
+                {
+                    glm::vec3 nt = glm::normalize(normalMat * n);
+                    allNormals.push_back(nt);
+                    objFile << "vn " << std::fixed << std::setprecision(6)
+                        << nt.x << " " << nt.y << " " << nt.z << "\n";
+                }
+            }
+            else
+            {
+                // Si no hay normales, no escribiremos vn; las caras seguirán sin referencia a vn.
+            }
+        }
+    }
+
+    // Ahora escribir las caras por sub-mesh (usando offsets)
+    vertexOffset = 0;
+    normalOffset = 0;
+    for (size_t i = 0; i < subMeshes.size(); ++i)
+    {
+        const auto& sm = subMeshes[i];
+        std::string matName = "mat_" + std::to_string(i);
+
+        objFile << "\n# SubMesh " << i << "\n";
+        objFile << "g SubMesh_" << i << "\n";
+        objFile << "usemtl " << matName << "\n";
+
+        bool hasNormals = !sm.normals.empty();
+
+        // Las caras usan índices basados en la cantidad global pasada hasta ahora
+        for (size_t f = 0; f + 2 < sm.indices.size(); f += 3)
+        {
+            int ia = sm.indices[f + 0];
+            int ib = sm.indices[f + 1];
+            int ic = sm.indices[f + 2];
+
+            // OBJ usa índices 1-based, y nosotros añadimos vertexOffset
+            if (hasNormals)
+            {
+                // asumir correspondencia vértice->normal (por índice)
+                objFile << "f "
+                    << (vertexOffset + ia + 1) << "//" << (normalOffset + ia + 1) << " "
+                    << (vertexOffset + ib + 1) << "//" << (normalOffset + ib + 1) << " "
+                    << (vertexOffset + ic + 1) << "//" << (normalOffset + ic + 1) << "\n";
+            }
+            else
+            {
+                objFile << "f "
+                    << (vertexOffset + ia + 1) << " "
+                    << (vertexOffset + ib + 1) << " "
+                    << (vertexOffset + ic + 1) << "\n";
+            }
+        }
+
+        vertexOffset += sm.vertices.size();
+        if (!sm.normals.empty())
+            normalOffset += sm.normals.size();
+    }
+
+    objFile.close();
+    mtlFile.close();
+
+    return true;
 }

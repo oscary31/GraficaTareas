@@ -1,5 +1,7 @@
 #pragma once
-
+#include <string>
+#include <fstream>
+#include <iomanip>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -33,6 +35,10 @@ private:
     bool checkCompileErrors(GLuint shader, const char* type);
     void loadOBJFile();
     void renderOBJ();
+
+    // IO: guardar OBJ + MTL con transformaciones aplicadas a vértices/normales
+    void saveOBJFile();
+    bool saveOBJWithMTL(const std::string& objPath);
 
     // Visualización de normales
     bool m_showNormals = false;
@@ -107,6 +113,21 @@ protected:
     glm::vec3 m_cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
     glm::vec3 m_cameraTarget = glm::vec3(0.0f, 0.0f, -3.0f);
     glm::vec3 m_cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    // Camera - FPS style control
+    glm::vec3 m_cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+    glm::vec3 m_cameraRight = glm::vec3(1.0f, 0.0f, 0.0f);
+    glm::vec3 m_worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
+
+    // Cámara en estilo FPS
+    float m_cameraYaw = -90.0f;          // grados, rumbo inicial hacia -Z
+    float m_cameraPitch = 0.0f;          // grados
+    float m_cameraSpeed = 0.1f;          // distancia por pulsación/step
+    float m_mouseSensitivity = 0.1f;     // grados por pixel de ratón
+    bool m_mouseLookEnabled = true;      // permitir mirar con botón central
+
+    // Helpers para la cámara
+    void computeCameraVectors();
+    void updateViewMatrix();
 
     // Matrices
     glm::mat4 m_projectionMatrix;

@@ -101,9 +101,18 @@ bool OBJLoader::load(const std::string& objPath) {
     std::unordered_map<std::string, unsigned int> vertexIndexMap;
     vertexIndexMap.clear();
 
+    bool isBakedOBJ = false; // NUEVO: si el OBJ fue exportado por la aplicación (vértices ya baked)
+
     std::string line;
     while (std::getline(file, line)) {
-        if (line.empty() || line[0] == '#') continue;
+        if (line.empty()) continue;
+
+        // Detectar comentario de exportación para evitar normalización posterior
+        if (line.find("Exportado por OBJ Viewer") != std::string::npos) {
+            isBakedOBJ = true;
+        }
+
+        if (line[0] == '#') continue;
 
         std::istringstream iss(line);
         std::string prefix;
@@ -252,14 +261,17 @@ bool OBJLoader::load(const std::string& objPath) {
         std::cout << "Mensaje: No se encontro archivo MTL o esta vacio. Usando color gris por defecto (0.7, 0.7, 0.7)" << std::endl;
     }
 
-    calculateNormalization();
+    // Si el OBJ fue exportado por la aplicación (vértices baked), NO recalcular normalización
+    if (!isBakedOBJ) {
+        calculateNormalization();
+    }
+    else {
+        std::cout << "INFO: OBJ marcado como exportado por la aplicación -> se omite calculateNormalization()\n";
+        // m_center y m_scaleFactor ya están en valores neutrales desde clear()
+    }
 
-    // ============================================================
-    // AQUÍ ES DONDE DEBES LLAMAR A calculateVertexNormals()
-    // Se llama DESPUÉS de cargar todo el OBJ y ANTES de setupBuffers()
-    // ============================================================
+    // Calcula/ajusta normales si es necesario y prepara buffers
     calculateVertexNormals();
-
     setupBuffers();
 
     return true;
