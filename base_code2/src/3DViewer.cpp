@@ -434,7 +434,7 @@ void C3DViewer::renderOBJ()
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
-    // 2) DIBUJAR ALAMBRADO (si está activado) — dibujamos encima en modo LINE
+    // 2) DIBUJAR ALAMBRADO (si está activado) — dibujamos encima en modo LINE sin iluminación
     if (m_showWireframe)
     {
         // Antialiasing de líneas (opcional)
@@ -462,11 +462,19 @@ void C3DViewer::renderOBJ()
             if (m_depthTestEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
             if (m_backfaceCullingEnabled) { glEnable(GL_CULL_FACE); glCullFace(m_cullFaceMode); }
             else glDisable(GL_CULL_FACE);
-            // Nota: el relleno ya se dibujó antes (con polygon offset si estaba activado),
-            // por tanto las líneas se verán correctamente respecto a ese fill.
         }
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+        // Usar shader plano (sin iluminación) para el wireframe: reuso el shader de bounding box (boxColor)
+        glUseProgram(m_boundingBoxShaderProgram);
+        GLint wf_viewLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "view");
+        GLint wf_projLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "projection");
+        GLint wf_modelLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "model");
+        GLint wf_colorLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "boxColor");
+
+        if (wf_viewLoc >= 0) glUniformMatrix4fv(wf_viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
+        if (wf_projLoc >= 0) glUniformMatrix4fv(wf_projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
 
         for (size_t i = 0; i < m_objLoader.getSubMeshes().size(); ++i)
         {
@@ -475,8 +483,8 @@ void C3DViewer::renderOBJ()
             glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
             m_modelMatrix = subMeshTransform * baseModel;
 
-            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
-            glUniform3fv(objectColorLoc, 1, glm::value_ptr(m_wireframeColor));
+            if (wf_modelLoc >= 0) glUniformMatrix4fv(wf_modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
+            if (wf_colorLoc >= 0) glUniform3fv(wf_colorLoc, 1, glm::value_ptr(m_wireframeColor));
 
             glBindVertexArray(subMesh.VAO);
             glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
@@ -487,7 +495,6 @@ void C3DViewer::renderOBJ()
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glLineWidth(1.0f);
 
-        // Restaurar depth-test y culling al estado previo
         if (prevDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
         if (prevCull) { glEnable(GL_CULL_FACE); glCullFace(m_cullFaceMode); }
         else glDisable(GL_CULL_FACE);
@@ -690,7 +697,7 @@ void C3DViewer::drawInterface()
 
         if (m_showVertices)
         {
-            if (ImGui::SliderFloat("Tamanio Vertices", &m_vertexSize, 1.0f, 20.0f))
+            if (ImGui::SliderFloat("Longitud Vertices", &m_vertexSize, 1.0f, 20.0f))
             {
             }
             if (ImGui::ColorEdit3("Color Vertices", &m_vertexColor.x))
@@ -782,7 +789,7 @@ void C3DViewer::drawInterface()
 }
 void C3DViewer::resize(int new_width, int new_height)
 {
-    // Evitar divisi?n por cero
+    // Evitar division por cero
     if (new_width <= 0 || new_height <= 0)
     {
         std::cerr << "Advertencia: Dimensiones inv?lidas ("
