@@ -43,6 +43,7 @@ bool C3DViewer::setup()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_SAMPLES, 4);
 
     m_window = glfwCreateWindow(width, height, "OBJ Viewer - OpenGL", NULL, NULL);
     if (!m_window)
@@ -59,6 +60,11 @@ bool C3DViewer::setup()
         glfwTerminate();
         return false;
     }
+
+    if (m_lineAntiAlias)
+        glEnable(GL_MULTISAMPLE);
+    else
+        glDisable(GL_MULTISAMPLE);
 
     // Inicializar estado de depth-test y culling según flags
     if (m_depthTestEnabled)
@@ -437,7 +443,7 @@ void C3DViewer::renderOBJ()
     // 2) DIBUJAR ALAMBRADO (si está activado) — dibujamos encima en modo LINE sin iluminación
     if (m_showWireframe)
     {
-        // Antialiasing de líneas (opcional)
+        // Antialiasing de líneas
         if (m_lineAntiAlias)
         {
             glEnable(GL_LINE_SMOOTH);
@@ -617,8 +623,23 @@ void C3DViewer::drawInterface()
         }
 
         if (ImGui::Checkbox("Antialiasing", &m_lineAntiAlias))
-        {
-        }
+             {
+                // MSAA para suavizado global de geometría (triángulos) + mejoras para líneas
+                if (m_lineAntiAlias) {
+                glEnable(GL_MULTISAMPLE);    // suaviza bordes de triángulos y polígonos
+                                // Opcional: mejorar líneas con smoothing y blending
+                    glEnable(GL_LINE_SMOOTH);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                
+            }
+                else {
+                glDisable(GL_MULTISAMPLE);
+                glDisable(GL_LINE_SMOOTH);
+                glDisable(GL_BLEND);
+               
+            }
+             }
 
         if (ImGui::ColorEdit3("Color Fondo", &m_backgroundColor.x))
         {
