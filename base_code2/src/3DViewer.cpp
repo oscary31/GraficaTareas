@@ -2,7 +2,6 @@
 #include "3DViewer.h"
 #include <iostream>
 #include <cmath> 
-//#include <filesystem>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include "tinyfiledialogs.h"
@@ -66,7 +65,7 @@ bool C3DViewer::setup()
     else
         glDisable(GL_MULTISAMPLE);
 
-    // Inicializar estado de depth-test y culling según flags
+    // Inicializar estado de depth-test y culling segun flags
     if (m_depthTestEnabled)
         glEnable(GL_DEPTH_TEST);
     else
@@ -96,6 +95,7 @@ bool C3DViewer::setup()
             ptr->resize(w, h);
         });
 
+    // Compilar y enlazar shaders principales
     if (!setupShader()) return false;
     if (!setupPickingShader()) return false;
     if (!setupBoundingBoxShader()) return false;
@@ -110,8 +110,10 @@ bool C3DViewer::setup()
         height = 720;
     }
 
+    // Actualiza viewport y matrices cuando la ventana cambia de tamaño
     glViewport(0, 0, width, height);
 
+    // Crear viewport y configurar estados GL iniciales
     glfwSetKeyCallback(m_window, keyCallbackStatic);
     glfwSetMouseButtonCallback(m_window, mouseButtonCallbackStatic);
     glfwSetCursorPosCallback(m_window, cursorPosCallbackStatic);
@@ -120,7 +122,7 @@ bool C3DViewer::setup()
         (float)width / (float)height,
         0.1f, 100.0f);
 
-    // Inicializar vectores de cámara a partir de posición/target actuales
+    // Inicializar vectores de camara a partir de posicion/target actuales
     m_cameraFront = glm::normalize(m_cameraTarget - m_cameraPos);
     // Derivar yaw/pitch desde front
     m_cameraYaw = glm::degrees(std::atan2(m_cameraFront.z, m_cameraFront.x));
@@ -136,6 +138,7 @@ bool C3DViewer::setup()
 
 void C3DViewer::update()
 {
+
     // Calcular FPS promedio en ventana deslizante (m_fpsWindowSeconds)
     double now = glfwGetTime();
     m_frameTimestamps.push_back(now);
@@ -146,7 +149,7 @@ void C3DViewer::update()
         m_frameTimestamps.pop_front();
     }
 
-    // Calcular FPS: número de frames en ventana / duración real (mejor que dividir por ventana fija)
+    // Calcular FPS: numero de frames en ventana / duracion real (mejor que dividir por ventana fija)
     double span = m_frameTimestamps.empty() ? 0.0 : (m_frameTimestamps.back() - m_frameTimestamps.front());
     if (span > 1e-6 && m_frameTimestamps.size() > 1)
     {
@@ -154,7 +157,7 @@ void C3DViewer::update()
     }
     else
     {
-        // Si no hay suficiente historial, aproximamos con el último delta si fuera posible
+        // Si no hay suficiente historial, aproximamos con el ultimo delta si fuera posible
         m_fpsAverage = 0.0;
     }
 }
@@ -197,7 +200,7 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
                 std::cout << "Sub-mesh eliminado" << std::endl;
             }
         }
-        // MOVIMIENTO CAMERA - adelante / atras en dirección front (UP / DOWN)
+        // MOVIMIENTO CAMERA - adelante / atras en direccion front (UP / DOWN)
         else if (key == GLFW_KEY_UP)
         {
             glm::vec3 delta = m_cameraFront * m_cameraSpeed;
@@ -215,7 +218,7 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
         // ROTACION CAMERA con teclas LEFT/RIGHT (gira yaw)
         else if (key == GLFW_KEY_LEFT)
         {
-            float step = 5.0f; // grados por pulsación
+            float step = 5.0f; // grados por pulsacion
             m_cameraYaw -= step;
             computeCameraVectors();
             updateViewMatrix();
@@ -230,10 +233,10 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
     }
 }
 
-// Modificada: Verificación de ImGui para evitar conflictos
+
 void C3DViewer::onMouseButton(int button, int action, int mods)
 {
-    // NUEVO: Verificar si ImGui capturó el evento
+
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) {
         return;
@@ -261,7 +264,7 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
                 else
                 {
                     m_selectedSubMesh = -1;
-                    std::cout << "Ningún sub-mesh seleccionado" << std::endl;
+                    std::cout << "Ningun sub-mesh seleccionado" << std::endl;
                 }
             }
         }
@@ -275,6 +278,7 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
 
 void C3DViewer::onCursorPos(double xpos, double ypos)
 {
+    // Maneja movimiento del cursor para rotar/trasladar segun boton
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) {
         m_lastMouseX = xpos;
@@ -282,12 +286,11 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
         return;
     }
 
-    // Si no hay objeto cargado o aunque lo haya, permitimos mirar con botón central
     double deltaX = xpos - m_lastMouseX;
     double deltaY = ypos - m_lastMouseY;
 
-    // Si mantienes pulsado botón izquierdo el código existente rota el objeto;
-    // si mantienes pulsado botón medio (wheel) rotamos la cámara (mouse-look)
+    // Si mantiene pulsado boton izquierdo el codigo existente rota el objeto;
+    // si mantiene pulsado boton medio (wheel) rotamos la camara (mouse-look)
     if (mouseButtonsDown[GLFW_MOUSE_BUTTON_MIDDLE] && m_mouseLookEnabled)
     {
         m_isDragging = true;
@@ -337,10 +340,9 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
 
             if (m_selectedSubMesh >= 0)
             {
-                // Trasladar sub-mesh seleccionado (actualiza solo la propiedad, las VBOs no se re-subirán)
+                // Trasladar sub-mesh seleccionado (actualiza solo la propiedad)
                 auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
                 subMeshes[m_selectedSubMesh].translation += translation;
-                // No regeneramos VBOs: las normales y vértices se transformarán en el shader
             }
             else
             {
@@ -356,6 +358,7 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
 
 void C3DViewer::loadOBJFile()
 {
+    // Abre dialog y carga un archivo OBJ en memoria
     const char* filterPatterns[1] = { "*.obj" };
     const char* filePath = tinyfd_openFileDialog(
         "Seleccionar archivo OBJ",
@@ -386,6 +389,7 @@ void C3DViewer::loadOBJFile()
 
 void C3DViewer::renderOBJ()
 {
+    // Renderiza la escena 3D: relleno, wireframe y overlays
     if (!m_objLoaded) return;
 
     glUseProgram(m_shaderProgram);
@@ -413,7 +417,7 @@ void C3DViewer::renderOBJ()
     GLint modelLoc = glGetUniformLocation(m_shaderProgram, "model");
     GLint objectColorLoc = glGetUniformLocation(m_shaderProgram, "objectColor");
 
-    // 1) DIBUJAR RELLENO (si está activado) — aplicamos polygon offset para evitar z-fighting
+    // 1) DIBUJAR RELLENO (si esta activado) — aplicamos polygon offset para evitar z-fighting
     if (m_showFill)
     {
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -440,10 +444,10 @@ void C3DViewer::renderOBJ()
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
-    // 2) DIBUJAR ALAMBRADO (si está activado) — dibujamos encima en modo LINE sin iluminación
+    // 2) DIBUJAR ALAMBRADO (si esta activado)
     if (m_showWireframe)
     {
-        // Antialiasing de líneas
+        // Antialiasing de lineas
         if (m_lineAntiAlias)
         {
             glEnable(GL_LINE_SMOOTH);
@@ -458,21 +462,22 @@ void C3DViewer::renderOBJ()
 
         if (!m_showFill)
         {
-            // Sin relleno: queremos ver TODAS las aristas (incluso las "ocultas")
+            // Sin relleno: ver todas las aristas 
             glDisable(GL_CULL_FACE);
             glDisable(GL_DEPTH_TEST);
         }
         else
         {
-            // Con relleno: respetar ocultación (depth-test) y culling según la configuración del usuario
+            // Con relleno: respetar ocultacion (depth-test) y culling segun la configuracion
             if (m_depthTestEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
             if (m_backfaceCullingEnabled) { glEnable(GL_CULL_FACE); glCullFace(m_cullFaceMode); }
             else glDisable(GL_CULL_FACE);
         }
 
+        // Dibujar en modo lineal (wireframe)
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
-        // Usar shader plano (sin iluminación) para el wireframe: reuso el shader de bounding box (boxColor)
+        // Usar shader plano sin iluminacion para el wireframe
         glUseProgram(m_boundingBoxShaderProgram);
         GLint wf_viewLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "view");
         GLint wf_projLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "projection");
@@ -531,6 +536,7 @@ void C3DViewer::renderOBJ()
 
 void C3DViewer::computeCameraVectors()
 {
+    // Recalcula vectores de camara (front, right, up) desde yaw/pitch
     // Convertir yaw/pitch (grados) a vector front
     glm::vec3 front;
     front.x = std::cos(glm::radians(m_cameraYaw)) * std::cos(glm::radians(m_cameraPitch));
@@ -547,6 +553,7 @@ void C3DViewer::computeCameraVectors()
 
 void C3DViewer::updateViewMatrix()
 {
+    // Actualiza la matriz view usando posicion y front de la camara
     m_viewMatrix = glm::lookAt(m_cameraPos, m_cameraPos + m_cameraFront, m_cameraUp);
 }
 
@@ -622,12 +629,12 @@ void C3DViewer::drawInterface()
             ImGui::Text("FPS (media %.1fs): %.2f", m_fpsWindowSeconds, m_fpsAverage);
         }
 
+        // Control de antialiasing
         if (ImGui::Checkbox("Antialiasing", &m_lineAntiAlias))
-             {
-                // MSAA para suavizado global de geometría (triángulos) + mejoras para líneas
+        {
+                // suavizado global de geometria + mejoras para lineas
                 if (m_lineAntiAlias) {
-                glEnable(GL_MULTISAMPLE);    // suaviza bordes de triángulos y polígonos
-                                // Opcional: mejorar líneas con smoothing y blending
+                glEnable(GL_MULTISAMPLE);
                     glEnable(GL_LINE_SMOOTH);
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -639,7 +646,7 @@ void C3DViewer::drawInterface()
                 glDisable(GL_BLEND);
                
             }
-             }
+        }
 
         if (ImGui::ColorEdit3("Color Fondo", &m_backgroundColor.x))
         {
@@ -686,13 +693,13 @@ void C3DViewer::drawInterface()
             
         }
 
-        // visualización de normales
+        // visualizacion de normales
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0, 1, 0, 1), "Geometria:");
 
         if (ImGui::Checkbox("Mostrar Normales", &m_showNormals))
         {
-            // tener las líneas generadas
+            // tener las lineas generadas
             if (m_showNormals)
                 generateNormalLines();
         }
@@ -777,9 +784,9 @@ void C3DViewer::drawInterface()
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             auto& selectedSM = subMeshes[m_selectedSubMesh];
 
-            if (ImGui::DragFloat3("Traslacion Sub-mesh", &selectedSM.translation.x, 0.01f))
+            if (ImGui::DragFloat3("Traslacion del Sub-mesh", &selectedSM.translation.x, 0.01f))
             {
-                // regenerar buffers para que la UI actualice la posición de vértices y normales
+                // regenerar buffers para que la UI actualice la posicion de vertices y normales
                 generateVertexPoints();
                 generateNormalLines();
             }
@@ -793,7 +800,7 @@ void C3DViewer::drawInterface()
                 subMeshes.erase(subMeshes.begin() + m_selectedSubMesh);
                 m_selectedSubMesh = -1;
                 assignPickingColors();
-                generateNormalLines();  // Regenerar normales después de eliminar
+                generateNormalLines();  // Regenerar normales despues de eliminar
                 generateVertexPoints();
                 std::cout << "Sub-mesh eliminado desde interfaz" << std::endl;
             }
@@ -813,7 +820,7 @@ void C3DViewer::resize(int new_width, int new_height)
     // Evitar division por cero
     if (new_width <= 0 || new_height <= 0)
     {
-        std::cerr << "Advertencia: Dimensiones inv?lidas ("
+        std::cerr << "Advertencia: Dimensiones invalidas ("
             << new_width << "x" << new_height << "), ignorando resize" << std::endl;
         return;
     }
@@ -938,12 +945,13 @@ void C3DViewer::setupPickingFramebuffer()
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     {
-        std::cerr << "Error: Framebuffer de picking no est? completo" << std::endl;
+        std::cerr << "Error: Framebuffer de picking no esta completo" << std::endl;
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+// Crea framebuffer y buffers para la pasada de picking
 void C3DViewer::renderForPicking()
 {
     if (!m_objLoaded) return;
@@ -1006,6 +1014,7 @@ int C3DViewer::performPicking(int mouseX, int mouseY)
     return pickedID;
 }
 
+// Lee el color del pixel en pantalla para determinar sub-mesh seleccionado
 bool C3DViewer::setupPickingShader()
 {
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
@@ -1223,7 +1232,7 @@ void C3DViewer::generateNormalLines()
         // longitud deseada en mundo
         float Lw = diagonalWorld * m_normalLengthPercent;
 
-        // mat3 del modelo (sin traslación) para convertir vectores normales a mundo
+        // mat3 del modelo (sin traslacion) para convertir vectores normales a mundo
         glm::mat3 model3 = glm::mat3(modelForWorld);
 
         for (size_t i = 0; i < subMesh.vertices.size(); ++i)
@@ -1247,7 +1256,7 @@ void C3DViewer::generateNormalLines()
         m_normalCounts.push_back(count);
     }
 
-    // Subir VBO (datos en espacio local)
+    
     if (m_normalVAO == 0)
     {
         glGenVertexArrays(1, &m_normalVAO);
@@ -1264,7 +1273,7 @@ void C3DViewer::generateNormalLines()
 
     glBindVertexArray(0);
 
-    std::cout << "Generadas " << m_normalLines.size() / 2 << " líneas de normales (por sub-mesh: " << m_normalCounts.size() << ")" << std::endl;
+    std::cout << "Generadas " << m_normalLines.size() / 2 << " lineas de normales (por sub-mesh: " << m_normalCounts.size() << ")" << std::endl;
 }
 
 void C3DViewer::generateVertexPoints()
@@ -1273,58 +1282,70 @@ void C3DViewer::generateVertexPoints()
     m_vertexOffsets.clear();
     m_vertexCounts.clear();
 
+    // Recorremos cada sub-malla del objeto cargado para extraer sus vertices
     for (const auto& subMesh : m_objLoader.getSubMeshes())
     {
+        // Guardamos donde empieza este bloque de vertices en el vector global
         int offset = (int)m_vertexPoints.size();
         int count = 0;
 
         for (const auto& vertex : subMesh.vertices)
         {
-            m_vertexPoints.push_back(vertex); // en espacio local, sin aplicar translation
+            // Metemos el vertice tal cual (coordenadas locales)
+            m_vertexPoints.push_back(vertex);
             ++count;
         }
 
+        // Registramos el offset y la cantidad para saber que dibujar luego
         m_vertexOffsets.push_back(offset);
         m_vertexCounts.push_back(count);
     }
 
+    // Si es la primera vez, generamos los buffers en la GPU (VAO y VBO)
     if (m_vertexVAO == 0)
     {
         glGenVertexArrays(1, &m_vertexVAO);
         glGenBuffers(1, &m_vertexVBO);
     }
 
+    // Subimos la informacion de los puntos a la memoria de video
     glBindVertexArray(m_vertexVAO);
     glBindBuffer(GL_ARRAY_BUFFER, m_vertexVBO);
     glBufferData(GL_ARRAY_BUFFER, m_vertexPoints.size() * sizeof(glm::vec3),
         m_vertexPoints.data(), GL_DYNAMIC_DRAW);
 
+    // Definimos el layout: 3 floats (x, y, z) que entran por el layout 0
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
     glEnableVertexAttribArray(0);
 
     glBindVertexArray(0);
 
+    // Feedback por consola para saber que todo ha ido bien
     std::cout << "Generados " << m_vertexPoints.size() << " puntos de vertices (por sub-mesh: " << m_vertexCounts.size() << ")" << std::endl;
 }
 
 bool C3DViewer::setupVertexShader()
 {
+    // Creamos y compilamos el Vertex Shader para los puntos
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertexShader, 1, &vertexPointVertexShaderSrc, nullptr);
     glCompileShader(vertexShader);
     if (!checkCompileErrors(vertexShader, "VERTEX_POINT_VERTEX")) return false;
 
+    // Hacemos lo mismo con el Fragment Shader (el color de los puntos)
     GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(fragmentShader, 1, &vertexPointFragmentShaderSrc, nullptr);
     glCompileShader(fragmentShader);
     if (!checkCompileErrors(fragmentShader, "VERTEX_POINT_FRAGMENT")) return false;
 
+    // Creamos el programa final vinculando ambos shaders
     m_vertexShaderProgram = glCreateProgram();
     glAttachShader(m_vertexShaderProgram, vertexShader);
     glAttachShader(m_vertexShaderProgram, fragmentShader);
     glLinkProgram(m_vertexShaderProgram);
     if (!checkCompileErrors(m_vertexShaderProgram, "VERTEX_POINT_PROGRAM")) return false;
 
+    // Una vez linkeados, los objetos shader individuales ya no nos sirven, los borramos
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
     return true;
@@ -1332,35 +1353,44 @@ bool C3DViewer::setupVertexShader()
 
 void C3DViewer::renderVertices()
 {
+    // Si no hay nada que dibujar, salimos
     if (m_vertexPoints.empty()) return;
 
+    // Activamos el shader de los puntos
     glUseProgram(m_vertexShaderProgram);
 
+    // Calculamos la matriz de normalizacion (centrar y escalar el modelo original)
     glm::mat4 normalizationMatrix = glm::mat4(1.0f);
     normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
     normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
 
+    // Calculamos la transformacion base: traslacion * rotacion * escala/centrado
     glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
     glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
     glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
 
+    // Buscamos donde estan los parametros (uniforms) en el shader
     GLint viewLoc = glGetUniformLocation(m_vertexShaderProgram, "view");
     GLint projLoc = glGetUniformLocation(m_vertexShaderProgram, "projection");
     GLint modelLoc = glGetUniformLocation(m_vertexShaderProgram, "model");
     GLint colorLoc = glGetUniformLocation(m_vertexShaderProgram, "vertexColor");
 
+    // Pasamos las matrices de vista, proyeccion y el color elegido
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
     glUniform3fv(colorLoc, 1, glm::value_ptr(m_vertexColor));
 
+    // Ajustamos el tamaño del punto en pantalla
     glPointSize(m_vertexSize);
 
+    // Configuramos transparencia y quitamos el depth test para que los puntos se vean sobre todo
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_DEPTH_TEST);
 
     glBindVertexArray(m_vertexVAO);
 
+    // Dibujamos cada sub-malla aplicando su propia traslacion local si la tiene
     const auto& subMeshes = m_objLoader.getSubMeshes();
     for (size_t i = 0; i < subMeshes.size(); ++i)
     {
@@ -1387,6 +1417,7 @@ void C3DViewer::renderNormals()
 
     glUseProgram(m_normalShaderProgram);
 
+    // Misma logica de matrices que en el render de vertices para que coincidan perfectamente
     glm::mat4 normalizationMatrix = glm::mat4(1.0f);
     normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
     normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
@@ -1404,7 +1435,7 @@ void C3DViewer::renderNormals()
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
     glUniform3fv(colorLoc, 1, glm::value_ptr(m_normalColor));
 
-    // Antialiasing de líneas (opcional)
+    // Antialiasing
     if (m_lineAntiAlias)
     {
         glEnable(GL_LINE_SMOOTH);
@@ -1415,6 +1446,7 @@ void C3DViewer::renderNormals()
 
     glBindVertexArray(m_normalVAO);
 
+    // Dibujamos las lineas de las normales sub-malla por sub-malla
     const auto& subMeshes = m_objLoader.getSubMeshes();
     for (size_t i = 0; i < subMeshes.size(); ++i)
     {
@@ -1496,7 +1528,7 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
         mtlFilename = mtlPath;
     objFile << "mtllib " << mtlFilename << "\n";
 
-    // Preparar matrices globales (aplicar las mismas transformaciones que en render)
+    // Preparar matrices globales, aplicar las mismas transformaciones que en render
     glm::mat4 normalizationMatrix = glm::mat4(1.0f);
     normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
     normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
@@ -1509,7 +1541,7 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
     size_t vertexOffset = 0;
     size_t normalOffset = 0;
 
-    // Guardar materiales en MTL (uno por sub-mesh)
+    // Guardar materiales en MTL, uno por sub-mesh
     const auto& subMeshes = m_objLoader.getSubMeshes();
     for (size_t i = 0; i < subMeshes.size(); ++i)
     {
@@ -1524,29 +1556,23 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
         mtlFile << "Ns 10.0\n\n";
     }
 
-    // Ahora escribir vertices/normales y caras en OBJ — mantendremos indices globales
-    // Primero, recorrer sub-meshes y volcar vértices y normales transformados (en orden)
+    // Ahora escribir vertices/normales y caras en OBJ — mantener indices globales
+    // Primero, recorrer sub-meshes y volcar vertices y normales transformados
     std::vector<glm::vec3> allNormals; allNormals.reserve(1024);
     for (size_t i = 0; i < subMeshes.size(); ++i)
     {
         const auto& sm = subMeshes[i];
         glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), sm.translation);
-        // Ahora escribir vértices/normales y caras en OBJ — mantendremos indices globales
-// Primero, recorrer sub-meshes y volcar vértices y normales transformados (en orden)
         std::vector<glm::vec3> allNormals; allNormals.reserve(1024);
         for (size_t i = 0; i < subMeshes.size(); ++i)
         {
             const auto& sm = subMeshes[i];
             glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), sm.translation);
-
-            // CORRECCIÓN: aplicar primero las transformaciones globales del objeto (baseModel)
-            // y luego la traslación local del sub-mesh. Así el vértice final = baseModel * subMeshTransform * v_local
             glm::mat4 model = baseModel * subMeshTransform;
 
             // mat3 para normales (inv-transpose) basada en la misma matriz 'model'
             glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(model)));
 
-            // vértices (transformados — baked)
             for (const auto& v : sm.vertices)
             {
                 glm::vec4 vt = model * glm::vec4(v, 1.0f);
@@ -1554,7 +1580,7 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
                     << vt.x << " " << vt.y << " " << vt.z << "\n";
             }
 
-            // normales (si existen en el submesh) — también transformadas y normalizadas
+            // normales (si existen en el submesh) tambien transformadas y normalizadas
             if (!sm.normals.empty())
             {
                 for (const auto& n : sm.normals)
@@ -1567,7 +1593,7 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
             }
             else
             {
-                // Si no hay normales, no escribiremos vn; las caras seguirán sin referencia a vn.
+                // Si no hay normales, no escribiremos vn
             }
         }
     }
@@ -1586,17 +1612,17 @@ bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
 
         bool hasNormals = !sm.normals.empty();
 
-        // Las caras usan índices basados en la cantidad global pasada hasta ahora
+        // Las caras usan indices basados en la cantidad global pasada hasta ahora
         for (size_t f = 0; f + 2 < sm.indices.size(); f += 3)
         {
             int ia = sm.indices[f + 0];
             int ib = sm.indices[f + 1];
             int ic = sm.indices[f + 2];
 
-            // OBJ usa índices 1-based, y nosotros añadimos vertexOffset
+            // OBJ usa indices 1-based, y añadimos vertexOffset
             if (hasNormals)
             {
-                // asumir correspondencia vértice->normal (por índice)
+                // asumir correspondencia vertice->normal (por indice)
                 objFile << "f "
                     << (vertexOffset + ia + 1) << "//" << (normalOffset + ia + 1) << " "
                     << (vertexOffset + ib + 1) << "//" << (normalOffset + ib + 1) << " "

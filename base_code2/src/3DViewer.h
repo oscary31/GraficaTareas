@@ -36,13 +36,13 @@ private:
     void loadOBJFile();
     void renderOBJ();
 
-    // IO: guardar OBJ + MTL con transformaciones aplicadas a vértices/normales
+    // guardar OBJ + MTL con transformaciones aplicadas a vertices/normales
     void saveOBJFile();
     bool saveOBJWithMTL(const std::string& objPath);
 
-    // Visualización de normales
+    // Visualizacion de normales
     bool m_showNormals = false;
-    bool m_showNormalsPerVertex = true; // nuevo: controlar ver/ocultar normales por vértice
+    bool m_showNormalsPerVertex = true; // controlar ver/ocultar normales por vertice
     float m_normalLengthPercent = 0.05f; // porcentaje (0..1) de la diagonal world del bounding box
     glm::vec3 m_normalColor = glm::vec3(0.0f, 1.0f, 1.0f); // color editable
     GLuint m_normalVAO = 0;
@@ -58,7 +58,7 @@ private:
     void generateNormalLines();
     void renderNormals();
 
-    // Visualización de vértices
+    // Visualizacion de vertices
     bool m_showVertices = false;
     float m_vertexSize = 5.0f;
     glm::vec3 m_vertexColor = glm::vec3(1.0f, 0.0f, 0.0f); // Rojo por defecto
@@ -67,7 +67,7 @@ private:
     GLuint m_vertexShaderProgram = 0;
     std::vector<glm::vec3> m_vertexPoints;
 
-    // Ranges por sub-mesh para dibujar partes del buffer combinado
+    // Rangos por sub-mesh para dibujar partes del buffer combinado
     std::vector<int> m_vertexOffsets;
     std::vector<int> m_vertexCounts;
 
@@ -76,8 +76,8 @@ private:
     void renderVertices();
 
     // Depth test y Culling
-    bool m_depthTestEnabled = true;               // habilita/deshabilita Z-buffer (GL_DEPTH_TEST)
-    bool m_backfaceCullingEnabled = true;         // habilita/deshabilita back-face culling (GL_CULL_FACE)
+    bool m_depthTestEnabled = true;               
+    bool m_backfaceCullingEnabled = true;         
     GLenum m_cullFaceMode = GL_BACK;
 
     static void keyCallbackStatic(GLFWwindow* window, int key, int scancode, int action, int mods);
@@ -92,16 +92,16 @@ protected:
     double lastTime = 0.0;
     bool mouseButtonsDown[3] = { false, false, false };
 
-    // Mostrar FPS (promedio últimos N segundos)
+    // Mostrar FPS (promedio ultimos N segundos)
     bool m_showFPS = false;
     std::deque<double> m_frameTimestamps;   // timestamps de frames
     double m_fpsWindowSeconds = 5.0;        // ventana para promedio (segundos)
     double m_fpsAverage = 0.0;              // valor calculado del FPS
 
-    // Antialiasing de líneas
+    // Antialiasing de lineas
     bool m_lineAntiAlias = false;
 
-    // Color de fondo (editable)
+    // Color de fondo 
     glm::vec3 m_backgroundColor = glm::vec3(0.15f, 0.15f, 0.2f);
 
     // OBJ Loader
@@ -118,14 +118,14 @@ protected:
     glm::vec3 m_cameraRight = glm::vec3(1.0f, 0.0f, 0.0f);
     glm::vec3 m_worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
 
-    // Cámara en estilo FPS
+    // Camara estilo FPS
     float m_cameraYaw = -90.0f;          // grados, rumbo inicial hacia -Z
     float m_cameraPitch = 0.0f;          // grados
-    float m_cameraSpeed = 0.1f;          // distancia por pulsación/step
-    float m_mouseSensitivity = 0.1f;     // grados por pixel de ratón
-    bool m_mouseLookEnabled = true;      // permitir mirar con botón central
+    float m_cameraSpeed = 0.1f;          // distancia por pulsacion/step
+    float m_mouseSensitivity = 0.1f;     // grados por pixel de raton
+    bool m_mouseLookEnabled = true;      // permitir mirar con boton central
 
-    // Helpers para la cámara
+    // Helpers para la camara
     void computeCameraVectors();
     void updateViewMatrix();
 
@@ -164,11 +164,11 @@ protected:
     glm::vec3 m_boundingBoxColor = glm::vec3(1.0f, 1.0f, 0.0f); // Amarillo por defecto
 
     // Relleno / Alambrado
-    bool m_showFill = true;                     // mostrar relleno de triángulos
+    bool m_showFill = true;                     // mostrar relleno de triangulos
     bool m_showWireframe = false;               // mostrar alambrado
     glm::vec3 m_wireframeColor = glm::vec3(0.0f, 0.0f, 0.0f); // color del alambrado (negro por defecto)
 
-    // Parámetros para evitar z-fighting (se usan cuando se dibuja relleno)
+    // Parametros para evitar z-fighting (se usan cuando se dibuja relleno)
     float m_fillPolygonOffsetFactor = 1.0f;
     float m_fillPolygonOffsetUnits = 1.0f;
 
@@ -177,7 +177,7 @@ protected:
     bool setupBoundingBoxShader();
     void calculateSubMeshBounds(const SubMesh& subMesh, glm::vec3& minBounds, glm::vec3& maxBounds);
 
-    // Shaders actualizados para lighting básico
+    // Shaders actualizados para lighting basico
     const char* vertexShaderSrc = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPos;
@@ -285,7 +285,7 @@ protected:
         }
     )glsl";
 
-    // Shader para normales (agregar junto a los otros shaders)
+    // Shader para normales 
     const char* normalVertexShaderSrc = R"glsl(
     #version 330 core
     layout(location = 0) in vec3 aPos;
@@ -311,7 +311,7 @@ protected:
     }
 )glsl";
 
-    // Shader para vértices
+    // Shader para vertices
     const char* vertexPointVertexShaderSrc = R"glsl(
     #version 330 core
     layout(location = 0) in vec3 aPos;
@@ -338,7 +338,7 @@ protected:
         float dist = length(coord);
         // Smooth edge: alpha decrece cerca del borde para antialiasing
         float alpha = 1.0 - smoothstep(0.48, 0.5, dist);
-        if (dist > 0.5) discard; // fuera del círculo
+        if (dist > 0.5) discard; // fuera del circulo
         FragColor = vec4(vertexColor, alpha);
     }
 )glsl";

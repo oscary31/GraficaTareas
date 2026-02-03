@@ -1,6 +1,11 @@
 ﻿  3DViewer.cpp
-C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(430,62): warning C4267: 'argumento': conversión de 'size_t' a 'GLsizei'; posible pérdida de datos
-C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(490,62): warning C4267: 'argumento': conversión de 'size_t' a 'GLsizei'; posible pérdida de datos
-C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(963,58): warning C4267: 'argumento': conversión de 'size_t' a 'GLsizei'; posible pérdida de datos
-C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(1017,16): warning C4267: 'inicializando': conversión de 'size_t' a 'int'; posible pérdida de datos
+C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(440,62): warning C4267: 'argumento': conversión de 'size_t' a 'GLsizei'; posible pérdida de datos
+C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(501,62): warning C4267: 'argumento': conversión de 'size_t' a 'GLsizei'; posible pérdida de datos
+C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(992,58): warning C4267: 'argumento': conversión de 'size_t' a 'GLsizei'; posible pérdida de datos
+C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\3DViewer.cpp(1047,16): warning C4267: 'inicializando': conversión de 'size_t' a 'int'; posible pérdida de datos
+  OBJLoader.cpp
+C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\src\OBJLoader.cpp(230,47): warning C4267: 'inicializando': conversión de 'size_t' a 'unsigned int'; posible pérdida de datos
+  main.cpp
+  Generando código...
+LINK : warning LNK4098: la biblioteca predeterminada'MSVCRT' entra en conflicto con otras bibliotecas; use la biblioteca /NODEFAULTLIB:biblioteca
   Proyecto2.vcxproj -> C:\Users\PC\Documents\Universidad\Semestre 2-2025\Grafica\Proyecto2\proyecto2_git\base_code2\x64\Debug\Proyecto2.exe

@@ -7,10 +7,10 @@
 
 struct Material {
     std::string name;
-    glm::vec3 Kd;  // Diffuse color
-    glm::vec3 Ka;  // Ambient color
-    glm::vec3 Ks;  // Specular color
-    std::string map_Kd;  // Diffuse texture (ignorado en este proyecto)
+    glm::vec3 Kd;  
+    glm::vec3 Ka;  
+    glm::vec3 Ks;  
+    std::string map_Kd;  
 
     Material() : Kd(0.7f, 0.7f, 0.7f), Ka(0.0f), Ks(0.0f) {}
 };
@@ -30,7 +30,7 @@ struct SubMesh {
     unsigned int VBO_texCoords;
     unsigned int EBO;
 
-    // Transform per submesh
+    // Transformacion por submesh
     glm::vec3 translation;
 
     // Picking color ID
