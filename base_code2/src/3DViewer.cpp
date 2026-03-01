@@ -4,6 +4,7 @@
 #include <cmath> 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <glm/gtc/constants.hpp>
 #include "tinyfiledialogs.h"
 
 C3DViewer::C3DViewer()
@@ -17,19 +18,11 @@ C3DViewer::~C3DViewer()
     ImGui::DestroyContext();
 
     if (m_shaderProgram) glDeleteProgram(m_shaderProgram);
-    if (m_pickingShaderProgram) glDeleteProgram(m_pickingShaderProgram);
-    if (m_boundingBoxShaderProgram) glDeleteProgram(m_boundingBoxShaderProgram);
-    if (m_normalShaderProgram) glDeleteProgram(m_normalShaderProgram);  // NUEVO
-    if (m_vertexVAO) glDeleteVertexArrays(1, &m_vertexVAO);
-    if (m_vertexVBO) glDeleteBuffers(1, &m_vertexVBO);
-    if (m_pickingFBO) glDeleteFramebuffers(1, &m_pickingFBO);
-    if (m_pickingTexture) glDeleteTextures(1, &m_pickingTexture);
-    if (m_pickingDepthBuffer) glDeleteRenderbuffers(1, &m_pickingDepthBuffer);
-    if (m_boundingBoxVAO) glDeleteVertexArrays(1, &m_boundingBoxVAO);
-    if (m_boundingBoxVBO) glDeleteBuffers(1, &m_boundingBoxVBO);
-    if (m_boundingBoxEBO) glDeleteBuffers(1, &m_boundingBoxEBO);
-    if (m_normalVAO) glDeleteVertexArrays(1, &m_normalVAO);  // NUEVO
-    if (m_normalVBO) glDeleteBuffers(1, &m_normalVBO);  // NUEVO
+    if (m_lightShaderProgram) glDeleteProgram(m_lightShaderProgram);
+    if (m_lightSphereVAO) glDeleteVertexArrays(1, &m_lightSphereVAO);
+    if (m_lightSphereVBO) glDeleteBuffers(1, &m_lightSphereVBO);
+    if (m_lightSphereEBO) glDeleteBuffers(1, &m_lightSphereEBO);
+    // Normal/vertex overlay resources removed
     if (m_window) glfwDestroyWindow(m_window);
     glfwTerminate();
 }
@@ -97,12 +90,8 @@ bool C3DViewer::setup()
 
     // Compilar y enlazar shaders principales
     if (!setupShader()) return false;
-    if (!setupPickingShader()) return false;
-    if (!setupBoundingBoxShader()) return false;
-    if (!setupNormalShader()) return false;  // NUEVO
-    if (!setupVertexShader()) return false;
-    setupPickingFramebuffer();
-    setupBoundingBox();
+    initLights();
+    if (!setupLightVisualization()) return false;
 
     if (width <= 0 || height <= 0)
     {
@@ -160,6 +149,14 @@ void C3DViewer::update()
         // Si no hay suficiente historial, aproximamos con el ultimo delta si fuera posible
         m_fpsAverage = 0.0;
     }
+
+    double deltaTime = 0.0;
+    if (m_lastLightUpdateTime > 0.0)
+    {
+        deltaTime = now - m_lastLightUpdateTime;
+    }
+    m_lastLightUpdateTime = now;
+    updateLightAnimation(deltaTime);
 }
 
 void C3DViewer::mainLoop()
@@ -187,19 +184,6 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
             glfwSetWindowShouldClose(m_window, GLFW_TRUE);
         else if (key == GLFW_KEY_O)
             loadOBJFile();
-        else if (key == GLFW_KEY_DELETE && m_selectedSubMesh >= 0)
-        {
-            auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
-            if (m_selectedSubMesh < (int)subMeshes.size())
-            {
-                subMeshes.erase(subMeshes.begin() + m_selectedSubMesh);
-                m_selectedSubMesh = -1;
-                assignPickingColors();
-                generateNormalLines();
-                generateVertexPoints();
-                std::cout << "Sub-mesh eliminado" << std::endl;
-            }
-        }
         // MOVIMIENTO CAMERA - adelante / atras en direccion front (UP / DOWN)
         else if (key == GLFW_KEY_UP)
         {
@@ -253,20 +237,6 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
             m_lastMouseX = xpos;
             m_lastMouseY = ypos;
 
-            if (button == GLFW_MOUSE_BUTTON_LEFT && m_objLoaded)
-            {
-                int pickedID = performPicking((int)xpos, (int)ypos);
-                if (pickedID > 0 && pickedID <= (int)m_objLoader.getSubMeshes().size())
-                {
-                    m_selectedSubMesh = pickedID - 1;
-                    std::cout << "Sub-mesh seleccionado: " << m_selectedSubMesh << std::endl;
-                }
-                else
-                {
-                    m_selectedSubMesh = -1;
-                    std::cout << "Ningun sub-mesh seleccionado" << std::endl;
-                }
-            }
         }
         else if (action == GLFW_RELEASE)
         {
@@ -338,17 +308,8 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
                 0.0f
             );
 
-            if (m_selectedSubMesh >= 0)
-            {
-                // Trasladar sub-mesh seleccionado (actualiza solo la propiedad)
-                auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
-                subMeshes[m_selectedSubMesh].translation += translation;
-            }
-            else
-            {
-                // Trasladar objeto completo
-                m_objectTranslation += translation;
-            }
+            // Trasladar objeto completo
+            m_objectTranslation += translation;
         }
     }
 
@@ -375,9 +336,7 @@ void C3DViewer::loadOBJFile()
         if (m_objLoader.load(filePath))
         {
             m_objLoaded = true;
-            assignPickingColors();
-            generateNormalLines();  // NUEVO
-            generateVertexPoints();
+            // overlay generation (normals/vertex points) removed
             std::cout << "OBJ cargado exitosamente" << std::endl;
         }
         else
@@ -389,10 +348,11 @@ void C3DViewer::loadOBJFile()
 
 void C3DViewer::renderOBJ()
 {
-    // Renderiza la escena 3D: relleno, wireframe y overlays
+    // Renderiza la escena 3D: relleno principal iluminado
     if (!m_objLoaded) return;
 
     glUseProgram(m_shaderProgram);
+    uploadLightUniforms();
 
     glm::mat4 normalizationMatrix = glm::mat4(1.0f);
     normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
@@ -407,18 +367,20 @@ void C3DViewer::renderOBJ()
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
 
-    glm::vec3 lightPos(2.0f, 2.0f, 2.0f);
-    glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
-
-    glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightPos"), 1, glm::value_ptr(lightPos));
     glUniform3fv(glGetUniformLocation(m_shaderProgram, "viewPos"), 1, glm::value_ptr(m_cameraPos));
-    glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightColor"), 1, glm::value_ptr(lightColor));
 
     GLint modelLoc = glGetUniformLocation(m_shaderProgram, "model");
-    GLint objectColorLoc = glGetUniformLocation(m_shaderProgram, "objectColor");
+    GLint materialKaLoc = glGetUniformLocation(m_shaderProgram, "materialKa");
+    GLint materialKdLoc = glGetUniformLocation(m_shaderProgram, "materialKd");
+    GLint materialKsLoc = glGetUniformLocation(m_shaderProgram, "materialKs");
+    GLint hasAmbientMapLoc = glGetUniformLocation(m_shaderProgram, "hasAmbientMap");
+    GLint hasDiffuseMapLoc = glGetUniformLocation(m_shaderProgram, "hasDiffuseMap");
+    GLint hasSpecularMapLoc = glGetUniformLocation(m_shaderProgram, "hasSpecularMap");
+    glUniform1i(glGetUniformLocation(m_shaderProgram, "texAmbient"), 0);
+    glUniform1i(glGetUniformLocation(m_shaderProgram, "texDiffuse"), 1);
+    glUniform1i(glGetUniformLocation(m_shaderProgram, "texSpecular"), 2);
 
-    // 1) DIBUJAR RELLENO (si esta activado) — aplicamos polygon offset para evitar z-fighting
-    if (m_showFill)
+    // 1) DIBUJAR RELLENO — siempre renderizamos el relleno de los sub-meshes
     {
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glEnable(GL_POLYGON_OFFSET_FILL);
@@ -433,105 +395,42 @@ void C3DViewer::renderOBJ()
 
             glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
 
-            glm::vec3 color = subMesh.material.Kd;
-            glUniform3fv(objectColorLoc, 1, glm::value_ptr(color));
+            const Material& material = subMesh.material;
+            glUniform3fv(materialKaLoc, 1, glm::value_ptr(material.Ka));
+            glUniform3fv(materialKdLoc, 1, glm::value_ptr(material.Kd));
+            glUniform3fv(materialKsLoc, 1, glm::value_ptr(material.Ks));
+
+            bool hasAmbient = material.ambientTexture != 0;
+            bool hasDiffuse = material.diffuseTexture != 0;
+            bool hasSpecular = material.specularTexture != 0;
+
+            glUniform1i(hasAmbientMapLoc, hasAmbient ? 1 : 0);
+            glUniform1i(hasDiffuseMapLoc, hasDiffuse ? 1 : 0);
+            glUniform1i(hasSpecularMapLoc, hasSpecular ? 1 : 0);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, hasAmbient ? material.ambientTexture : 0);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, hasDiffuse ? material.diffuseTexture : 0);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, hasSpecular ? material.specularTexture : 0);
 
             glBindVertexArray(subMesh.VAO);
             glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
             glBindVertexArray(0);
         }
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, 0);
 
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
-    // 2) DIBUJAR ALAMBRADO (si esta activado)
-    if (m_showWireframe)
-    {
-        // Antialiasing de lineas
-        if (m_lineAntiAlias)
-        {
-            glEnable(GL_LINE_SMOOTH);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
-        }
-
-        // Guardar estados previos
-        GLboolean prevCull = glIsEnabled(GL_CULL_FACE);
-        GLboolean prevDepth = glIsEnabled(GL_DEPTH_TEST);
-
-        if (!m_showFill)
-        {
-            // Sin relleno: ver todas las aristas 
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_DEPTH_TEST);
-        }
-        else
-        {
-            // Con relleno: respetar ocultacion (depth-test) y culling segun la configuracion
-            if (m_depthTestEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-            if (m_backfaceCullingEnabled) { glEnable(GL_CULL_FACE); glCullFace(m_cullFaceMode); }
-            else glDisable(GL_CULL_FACE);
-        }
-
-        // Dibujar en modo lineal (wireframe)
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-
-        // Usar shader plano sin iluminacion para el wireframe
-        glUseProgram(m_boundingBoxShaderProgram);
-        GLint wf_viewLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "view");
-        GLint wf_projLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "projection");
-        GLint wf_modelLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "model");
-        GLint wf_colorLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "boxColor");
-
-        if (wf_viewLoc >= 0) glUniformMatrix4fv(wf_viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
-        if (wf_projLoc >= 0) glUniformMatrix4fv(wf_projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
-
-        for (size_t i = 0; i < m_objLoader.getSubMeshes().size(); ++i)
-        {
-            const auto& subMesh = m_objLoader.getSubMeshes()[i];
-
-            glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
-            m_modelMatrix = subMeshTransform * baseModel;
-
-            if (wf_modelLoc >= 0) glUniformMatrix4fv(wf_modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
-            if (wf_colorLoc >= 0) glUniform3fv(wf_colorLoc, 1, glm::value_ptr(m_wireframeColor));
-
-            glBindVertexArray(subMesh.VAO);
-            glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
-            glBindVertexArray(0);
-        }
-
-        // Restaurar modo y estados
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        glLineWidth(1.0f);
-
-        if (prevDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-        if (prevCull) { glEnable(GL_CULL_FACE); glCullFace(m_cullFaceMode); }
-        else glDisable(GL_CULL_FACE);
-
-        if (m_lineAntiAlias)
-        {
-            glDisable(GL_BLEND);
-            glDisable(GL_LINE_SMOOTH);
-        }
-    }
-
-    if (m_selectedSubMesh >= 0 && m_selectedSubMesh < (int)m_objLoader.getSubMeshes().size())
-    {
-        const auto& selectedSubMesh = m_objLoader.getSubMeshes()[m_selectedSubMesh];
-        renderBoundingBox(selectedSubMesh, baseModel);
-    }
-
-    if (m_showNormals)
-    {
-        renderNormals();
-    }
-
-    if (m_showVertices)
-    {
-        renderVertices();
-    }
+    // Normal and vertex overlays removed
 }
 
 void C3DViewer::computeCameraVectors()
@@ -565,6 +464,8 @@ void C3DViewer::render()
     {
         renderOBJ();
     }
+
+    renderLightIndicators();
 
     drawInterface();
 }
@@ -600,21 +501,10 @@ void C3DViewer::drawInterface()
         ImGui::Text("OBJ Cargado");
         ImGui::Text("Submeshes: %zu", m_objLoader.getSubMeshes().size());
 
-        if (m_selectedSubMesh >= 0)
-        {
-            ImGui::Text("Sub-mesh seleccionado: %d", m_selectedSubMesh);
-        }
-        else
-        {
-            ImGui::Text("Ningun sub-mesh seleccionado");
-        }
-
         ImGui::Separator();
         ImGui::Text("Controles:");
-        ImGui::BulletText("Click izq: Seleccionar sub-mesh");
         ImGui::BulletText("Click izq + arrastrar: Rotar");
         ImGui::BulletText("Click der + arrastrar: Trasladar");
-        ImGui::BulletText("Delete: Eliminar sub-mesh seleccionado");
 
         // Render: fondo, FPS, antialiasing, depth-test y culling
         ImGui::Separator();
@@ -678,60 +568,32 @@ void C3DViewer::drawInterface()
             }
         }
 
-        //relleno / alambrado
-        if (ImGui::Checkbox("Mostrar Relleno", &m_showFill))
-        {
-        }
-        if (ImGui::Checkbox("Mostrar Alambrado", &m_showWireframe))
-        {
-        }
-        if (m_showWireframe)
-        {
-            if (ImGui::ColorEdit3("Color Alambrado", &m_wireframeColor.x))
-            {
-            }
-            
-        }
+        // (Opciones de relleno/alambrado removidas)
 
-        // visualizacion de normales
         ImGui::Separator();
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Geometria:");
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "Luces:");
+        ImGui::SliderFloat("Velocidad animacion", &m_lightAnimationSpeed, 0.0f, 3.0f, "%.2fx");
 
-        if (ImGui::Checkbox("Mostrar Normales", &m_showNormals))
+        const char* shadingModes[] = { "Phong", "Blinn-Phong", "Flat" };
+        for (int i = 0; i < MAX_LIGHTS; ++i)
         {
-            // tener las lineas generadas
-            if (m_showNormals)
-                generateNormalLines();
-        }
-
-        if (m_showNormals)
-        {
-            // Color editable para normales
-            if (ImGui::ColorEdit3("Color Normales", &m_normalColor.x))
+            ImGui::PushID(i);
+            std::string label = "Luz " + std::to_string(i + 1);
+            ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "%s", label.c_str());
+            ImGui::Checkbox("Activa", &m_lights[i].enabled);
+            ImGui::ColorEdit3("Ambiental", &m_lights[i].ambient.x);
+            ImGui::ColorEdit3("Difusa", &m_lights[i].diffuse.x);
+            ImGui::ColorEdit3("Especular", &m_lights[i].specular.x);
+            ImGui::Checkbox("Atenuacion", &m_lights[i].attenuationEnabled);
+            ImGui::Combo("Modelo", &m_lights[i].shadingModel, shadingModes, IM_ARRAYSIZE(shadingModes));
+            ImGui::PopID();
+            if (i < MAX_LIGHTS - 1)
             {
-            }
-
-            // Longitud como porcentaje 
-            float percent = m_normalLengthPercent * 100.0f;
-            if (ImGui::SliderFloat("Longitud Normales (%)", &percent, 0.0f, 100.0f))
-            {
-                m_normalLengthPercent = glm::clamp(percent / 100.0f, 0.0f, 1.0f);
-                generateNormalLines(); // regenerar porque la longitud local depende de este valor
+                ImGui::Separator();
             }
         }
-        if (ImGui::Checkbox("Mostrar Vertices", &m_showVertices))
-        {
-        }
 
-        if (m_showVertices)
-        {
-            if (ImGui::SliderFloat("Longitud Vertices", &m_vertexSize, 1.0f, 20.0f))
-            {
-            }
-            if (ImGui::ColorEdit3("Color Vertices", &m_vertexColor.x))
-            {
-            }
-        }
+        // Geometry overlay options removed (normals/vertices)
 
         ImGui::Separator();
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "Transformaciones del Objeto:");
@@ -754,7 +616,6 @@ void C3DViewer::drawInterface()
         if (ImGui::Button("Centrar sub-mallas"))
         {
             m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
-            m_selectedSubMesh = -1;
 
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             for (auto& sm : subMeshes)
@@ -768,7 +629,6 @@ void C3DViewer::drawInterface()
             m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
             m_objectScale = glm::vec3(1.0f);
             m_objectRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-            m_selectedSubMesh = -1;
 
             auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
             for (auto& sm : subMeshes)
@@ -777,38 +637,7 @@ void C3DViewer::drawInterface()
             }
         }
 
-        if (m_selectedSubMesh >= 0 && m_selectedSubMesh < (int)m_objLoader.getSubMeshes().size())
-        {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Sub-mesh seleccionado:");
-            auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
-            auto& selectedSM = subMeshes[m_selectedSubMesh];
-
-            if (ImGui::DragFloat3("Traslacion del Sub-mesh", &selectedSM.translation.x, 0.01f))
-            {
-                // regenerar buffers para que la UI actualice la posicion de vertices y normales
-                generateVertexPoints();
-                generateNormalLines();
-            }
-
-            if (ImGui::ColorEdit3("Color Material", &selectedSM.material.Kd.x))
-            {
-            }
-
-            if (ImGui::Button("Eliminar Sub-mesh"))
-            {
-                subMeshes.erase(subMeshes.begin() + m_selectedSubMesh);
-                m_selectedSubMesh = -1;
-                assignPickingColors();
-                generateNormalLines();  // Regenerar normales despues de eliminar
-                generateVertexPoints();
-                std::cout << "Sub-mesh eliminado desde interfaz" << std::endl;
-            }
-
-            ImGui::Separator();
-            ImGui::Text("Bounding Box:");
-            ImGui::ColorEdit3("Color Bounding Box", &m_boundingBoxColor.x);
-        }
+        // (Opciones de bounding box removidas)
     }
 
     ImGui::End();
@@ -833,14 +662,6 @@ void C3DViewer::resize(int new_width, int new_height)
         (float)width / (float)height,
         0.1f, 100.0f);
 
-    // Recrear framebuffer de picking con nuevo tamanio
-    if (m_pickingFBO)
-    {
-        glDeleteFramebuffers(1, &m_pickingFBO);
-        glDeleteTextures(1, &m_pickingTexture);
-        glDeleteRenderbuffers(1, &m_pickingDepthBuffer);
-        setupPickingFramebuffer();
-    }
 }
 
 bool C3DViewer::setupShader()
@@ -916,549 +737,222 @@ void C3DViewer::cursorPosCallbackStatic(GLFWwindow* window, double xpos, double 
         self->onCursorPos(xpos, ypos);
 }
 
-void C3DViewer::setupPickingFramebuffer()
+// Bounding box functionality removed.
+
+// Normal and vertex overlay functionality removed.
+
+void C3DViewer::initLights()
 {
-    // No crear framebuffer con dimensiones invalidas
-    if (width <= 0 || height <= 0)
+    const float phaseStep = glm::two_pi<float>() / static_cast<float>(MAX_LIGHTS);
+
+    m_lights[0].ambient = glm::vec3(0.25f, 0.07f, 0.05f);
+    m_lights[0].diffuse = glm::vec3(1.0f, 0.3f, 0.2f);
+    m_lights[0].specular = glm::vec3(1.0f, 0.5f, 0.4f);
+
+    m_lights[1].ambient = glm::vec3(0.07f, 0.25f, 0.08f);
+    m_lights[1].diffuse = glm::vec3(0.3f, 1.0f, 0.3f);
+    m_lights[1].specular = glm::vec3(0.5f, 1.0f, 0.5f);
+
+    m_lights[2].ambient = glm::vec3(0.05f, 0.08f, 0.25f);
+    m_lights[2].diffuse = glm::vec3(0.25f, 0.35f, 1.0f);
+    m_lights[2].specular = glm::vec3(0.45f, 0.55f, 1.0f);
+
+    for (int i = 0; i < MAX_LIGHTS; ++i)
     {
-        std::cerr << "Error: No se puede crear framebuffer con dimensiones "
-            << width << "x" << height << std::endl;
+        auto& light = m_lights[i];
+        light.orbitRadius = 2.5f;
+        light.orbitHeight = 1.2f;
+        light.orbitSpeed = 0.6f + 0.15f * i;
+        light.phaseOffset = phaseStep * static_cast<float>(i);
+        light.orbitAngle = 0.0f;
+        light.enabled = true;
+        light.attenuationEnabled = true;
+        light.shadingModel = 0; // Phong por defecto
+        float angle = light.phaseOffset;
+        light.position = glm::vec3(
+            light.orbitRadius * std::cos(angle),
+            light.orbitHeight,
+            light.orbitRadius * std::sin(angle));
+    }
+
+    m_lightAnimationSpeed = 1.0f;
+    m_lastLightUpdateTime = 0.0;
+    m_lightGlobalAngle = 0.0f;
+}
+
+void C3DViewer::updateLightAnimation(double deltaTime)
+{
+    if (deltaTime <= 0.0)
         return;
-    }
 
-    glGenFramebuffers(1, &m_pickingFBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, m_pickingFBO);
+    float baseSpeed = (MAX_LIGHTS > 0) ? m_lights[0].orbitSpeed : 0.0f;
+    m_lightGlobalAngle += baseSpeed * m_lightAnimationSpeed * static_cast<float>(deltaTime);
 
-    // Textura de color para picking
-    glGenTextures(1, &m_pickingTexture);
-    glBindTexture(GL_TEXTURE_2D, m_pickingTexture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_pickingTexture, 0);
-
-    // Depth buffer
-    glGenRenderbuffers(1, &m_pickingDepthBuffer);
-    glBindRenderbuffer(GL_RENDERBUFFER, m_pickingDepthBuffer);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width, height);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_pickingDepthBuffer);
-
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    for (auto& light : m_lights)
     {
-        std::cerr << "Error: Framebuffer de picking no esta completo" << std::endl;
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-// Crea framebuffer y buffers para la pasada de picking
-void C3DViewer::renderForPicking()
-{
-    if (!m_objLoaded) return;
-
-    glBindFramebuffer(GL_FRAMEBUFFER, m_pickingFBO);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    glUseProgram(m_pickingShaderProgram);
-
-    // Configurar matrices base
-    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
-    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
-    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
-
-    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
-    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
-    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
-
-    GLint viewLoc = glGetUniformLocation(m_pickingShaderProgram, "view");
-    GLint projLoc = glGetUniformLocation(m_pickingShaderProgram, "projection");
-    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
-    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
-
-    GLint modelLoc = glGetUniformLocation(m_pickingShaderProgram, "model");
-    GLint colorLoc = glGetUniformLocation(m_pickingShaderProgram, "pickingColor");
-
-    // Renderizar cada submesh con su color unico
-    for (const auto& subMesh : m_objLoader.getSubMeshes())
-    {
-        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
-        m_modelMatrix = subMeshTransform * baseModel;
-
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
-        glUniform3fv(colorLoc, 1, glm::value_ptr(subMesh.pickingColor));
-
-        glBindVertexArray(subMesh.VAO);
-        glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-int C3DViewer::performPicking(int mouseX, int mouseY)
-{
-    renderForPicking();
-
-    glBindFramebuffer(GL_FRAMEBUFFER, m_pickingFBO);
-
-    // Leer pixel en posicion del mouse (invertir Y)
-    unsigned char pixel[3];
-    glReadPixels(mouseX, height - mouseY, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, pixel);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    // Convertir color RGB a ID
-    int pickedID = pixel[0] + pixel[1] * 256 + pixel[2] * 256 * 256;
-
-    return pickedID;
-}
-
-// Lee el color del pixel en pantalla para determinar sub-mesh seleccionado
-bool C3DViewer::setupPickingShader()
-{
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &pickingVertexShaderSrc, nullptr);
-    glCompileShader(vertexShader);
-    if (!checkCompileErrors(vertexShader, "PICKING_VERTEX")) return false;
-
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &pickingFragmentShaderSrc, nullptr);
-    glCompileShader(fragmentShader);
-    if (!checkCompileErrors(fragmentShader, "PICKING_FRAGMENT")) return false;
-
-    m_pickingShaderProgram = glCreateProgram();
-    glAttachShader(m_pickingShaderProgram, vertexShader);
-    glAttachShader(m_pickingShaderProgram, fragmentShader);
-    glLinkProgram(m_pickingShaderProgram);
-    if (!checkCompileErrors(m_pickingShaderProgram, "PICKING_PROGRAM")) return false;
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-    return true;
-}
-
-void C3DViewer::assignPickingColors()
-{
-    auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
-
-    for (size_t i = 0; i < subMeshes.size(); ++i)
-    {
-        int id = i + 1;
-
-        int r = (id & 0x000000FF) >> 0;
-        int g = (id & 0x0000FF00) >> 8;
-        int b = (id & 0x00FF0000) >> 16;
-
-        subMeshes[i].pickingColor = glm::vec3(r / 255.0f, g / 255.0f, b / 255.0f);
-
-        std::cout << "SubMesh " << i << " - ID: " << id
-            << " Color: (" << r << ", " << g << ", " << b << ")" << std::endl;
+        float angle = m_lightGlobalAngle + light.phaseOffset;
+        light.orbitAngle = angle;
+        light.position.x = light.orbitRadius * std::cos(angle);
+        light.position.z = light.orbitRadius * std::sin(angle);
+        light.position.y = light.orbitHeight + 0.2f * std::sin(angle * 0.5f);
     }
 }
 
-void C3DViewer::setupBoundingBox()
+void C3DViewer::uploadLightUniforms()
 {
-    float vertices[] = {
-        -0.5f, -0.5f, -0.5f,
-         0.5f, -0.5f, -0.5f,
-         0.5f,  0.5f, -0.5f,
-        -0.5f,  0.5f, -0.5f,
-        -0.5f, -0.5f,  0.5f,
-         0.5f, -0.5f,  0.5f,
-         0.5f,  0.5f,  0.5f,
-        -0.5f,  0.5f,  0.5f
-    };
-
-    unsigned int indices[] = {
-        0, 1,  1, 2,  2, 3,  3, 0,
-        4, 5,  5, 6,  6, 7,  7, 4,
-        0, 4,  1, 5,  2, 6,  3, 7
-    };
-
-    glGenVertexArrays(1, &m_boundingBoxVAO);
-    glGenBuffers(1, &m_boundingBoxVBO);
-    glGenBuffers(1, &m_boundingBoxEBO);
-
-    glBindVertexArray(m_boundingBoxVAO);
-
-    glBindBuffer(GL_ARRAY_BUFFER, m_boundingBoxVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_boundingBoxEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-
-    glBindVertexArray(0);
-}
-
-bool C3DViewer::setupBoundingBoxShader()
-{
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &boundingBoxVertexShaderSrc, nullptr);
-    glCompileShader(vertexShader);
-    if (!checkCompileErrors(vertexShader, "BBOX_VERTEX")) return false;
-
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &boundingBoxFragmentShaderSrc, nullptr);
-    glCompileShader(fragmentShader);
-    if (!checkCompileErrors(fragmentShader, "BBOX_FRAGMENT")) return false;
-
-    m_boundingBoxShaderProgram = glCreateProgram();
-    glAttachShader(m_boundingBoxShaderProgram, vertexShader);
-    glAttachShader(m_boundingBoxShaderProgram, fragmentShader);
-    glLinkProgram(m_boundingBoxShaderProgram);
-    if (!checkCompileErrors(m_boundingBoxShaderProgram, "BBOX_PROGRAM")) return false;
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-    return true;
-}
-
-void C3DViewer::calculateSubMeshBounds(const SubMesh& subMesh, glm::vec3& minBounds, glm::vec3& maxBounds)
-{
-    if (subMesh.vertices.empty()) {
-        minBounds = glm::vec3(0.0f);
-        maxBounds = glm::vec3(0.0f);
+    if (m_shaderProgram == 0)
         return;
+
+    glm::vec3 positions[MAX_LIGHTS];
+    glm::vec3 ambients[MAX_LIGHTS];
+    glm::vec3 diffuses[MAX_LIGHTS];
+    glm::vec3 speculars[MAX_LIGHTS];
+    int enabled[MAX_LIGHTS];
+    int shadingModels[MAX_LIGHTS];
+    int attenuationFlags[MAX_LIGHTS];
+
+    for (int i = 0; i < MAX_LIGHTS; ++i)
+    {
+        positions[i] = m_lights[i].position;
+        ambients[i] = m_lights[i].ambient;
+        diffuses[i] = m_lights[i].diffuse;
+        speculars[i] = m_lights[i].specular;
+        enabled[i] = m_lights[i].enabled ? 1 : 0;
+        shadingModels[i] = m_lights[i].shadingModel;
+        attenuationFlags[i] = m_lights[i].attenuationEnabled ? 1 : 0;
     }
 
-    minBounds = glm::vec3(std::numeric_limits<float>::max());
-    maxBounds = glm::vec3(std::numeric_limits<float>::lowest());
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightPos"), MAX_LIGHTS, glm::value_ptr(positions[0]));
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightAmbient"), MAX_LIGHTS, glm::value_ptr(ambients[0]));
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightDiffuse"), MAX_LIGHTS, glm::value_ptr(diffuses[0]));
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightSpecular"), MAX_LIGHTS, glm::value_ptr(speculars[0]));
+    glUniform1iv(glGetUniformLocation(m_shaderProgram, "lightEnabled"), MAX_LIGHTS, enabled);
+    glUniform1iv(glGetUniformLocation(m_shaderProgram, "lightShadingModel"), MAX_LIGHTS, shadingModels);
+    glUniform1iv(glGetUniformLocation(m_shaderProgram, "lightUseAttenuation"), MAX_LIGHTS, attenuationFlags);
+}
 
-    for (const auto& vertex : subMesh.vertices)
+bool C3DViewer::setupLightVisualization()
+{
+    return setupLightSphereMesh() && setupLightShader();
+}
+
+bool C3DViewer::setupLightSphereMesh()
+{
+    if (m_lightSphereVAO != 0)
+        return true;
+
+    const unsigned int stacks = 12;
+    const unsigned int slices = 18;
+    std::vector<glm::vec3> vertices;
+    vertices.reserve((stacks + 1) * (slices + 1));
+    std::vector<unsigned int> indices;
+    indices.reserve(stacks * slices * 6);
+
+    for (unsigned int stack = 0; stack <= stacks; ++stack)
     {
-        minBounds = glm::min(minBounds, vertex);
-        maxBounds = glm::max(maxBounds, vertex);
-    }
-}
-
-void C3DViewer::renderBoundingBox(const SubMesh& subMesh, const glm::mat4& baseModel)
-{
-    glm::vec3 minBounds, maxBounds;
-    calculateSubMeshBounds(subMesh, minBounds, maxBounds);
-
-    glm::vec3 center = (minBounds + maxBounds) * 0.5f;
-    glm::vec3 size = maxBounds - minBounds;
-
-    glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
-    glm::mat4 boxModel = subMeshTransform * baseModel;
-
-    boxModel = glm::translate(boxModel, center);
-    boxModel = glm::scale(boxModel, size);
-
-    glUseProgram(m_boundingBoxShaderProgram);
-
-    GLint viewLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "view");
-    GLint projLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "projection");
-    GLint modelLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "model");
-    GLint colorLoc = glGetUniformLocation(m_boundingBoxShaderProgram, "boxColor");
-
-    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
-    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
-    glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(boxModel));
-    glUniform3fv(colorLoc, 1, glm::value_ptr(m_boundingBoxColor));
-
-    glDisable(GL_DEPTH_TEST);
-
-    glBindVertexArray(m_boundingBoxVAO);
-    glDrawElements(GL_LINES, 24, GL_UNSIGNED_INT, 0);
-    glBindVertexArray(0);
-
-    glEnable(GL_DEPTH_TEST);
-}
-
-bool C3DViewer::setupNormalShader()
-{
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &normalVertexShaderSrc, nullptr);
-    glCompileShader(vertexShader);
-    if (!checkCompileErrors(vertexShader, "NORMAL_VERTEX")) return false;
-
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &normalFragmentShaderSrc, nullptr);
-    glCompileShader(fragmentShader);
-    if (!checkCompileErrors(fragmentShader, "NORMAL_FRAGMENT")) return false;
-
-    m_normalShaderProgram = glCreateProgram();
-    glAttachShader(m_normalShaderProgram, vertexShader);
-    glAttachShader(m_normalShaderProgram, fragmentShader);
-    glLinkProgram(m_normalShaderProgram);
-    if (!checkCompileErrors(m_normalShaderProgram, "NORMAL_PROGRAM")) return false;
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-    return true;
-}
-
-void C3DViewer::generateNormalLines()
-{
-    m_normalLines.clear();
-    m_normalOffsets.clear();
-    m_normalCounts.clear();
-
-    // Matrices base (igual que en render)
-    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
-    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
-    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
-
-    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
-    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
-    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
-
-    const auto& subMeshes = m_objLoader.getSubMeshes();
-    for (size_t si = 0; si < subMeshes.size(); ++si)
-    {
-        const auto& subMesh = subMeshes[si];
-
-        int offset = (int)m_normalLines.size();
-        int count = 0;
-
-        // bounding box en local
-        glm::vec3 minB, maxB;
-        calculateSubMeshBounds(subMesh, minB, maxB);
-
-        // modelo que lleva coordenadas locales a mundo para este sub-mesh
-        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
-        glm::mat4 modelForWorld = subMeshTransform * baseModel;
-
-        // diagonal en coordenadas mundo
-        glm::vec3 worldMin = glm::vec3(modelForWorld * glm::vec4(minB, 1.0f));
-        glm::vec3 worldMax = glm::vec3(modelForWorld * glm::vec4(maxB, 1.0f));
-        float diagonalWorld = glm::length(worldMax - worldMin);
-
-        // longitud deseada en mundo
-        float Lw = diagonalWorld * m_normalLengthPercent;
-
-        // mat3 del modelo (sin traslacion) para convertir vectores normales a mundo
-        glm::mat3 model3 = glm::mat3(modelForWorld);
-
-        for (size_t i = 0; i < subMesh.vertices.size(); ++i)
+        float v = static_cast<float>(stack) / static_cast<float>(stacks);
+        float phi = glm::pi<float>() * v;
+        for (unsigned int slice = 0; slice <= slices; ++slice)
         {
-            if (i < subMesh.normals.size())
-            {
-                glm::vec3 v = subMesh.vertices[i];      // local coords
-                glm::vec3 n = glm::normalize(subMesh.normals[i]);
-
-                // longitud local tal que, tras aplicar model3, la longitud en mundo sea Lw:
-                float scaleAlongN = glm::length(model3 * n);
-                float Ln = (scaleAlongN > 1e-6f) ? (Lw / scaleAlongN) : 0.0f;
-
-                m_normalLines.push_back(v);
-                m_normalLines.push_back(v + n * Ln);
-                count += 2;
-            }
+            float u = static_cast<float>(slice) / static_cast<float>(slices);
+            float theta = glm::two_pi<float>() * u;
+            float x = std::sin(phi) * std::cos(theta);
+            float y = std::cos(phi);
+            float z = std::sin(phi) * std::sin(theta);
+            vertices.emplace_back(x, y, z);
         }
-
-        m_normalOffsets.push_back(offset);
-        m_normalCounts.push_back(count);
     }
 
-    
-    if (m_normalVAO == 0)
+    for (unsigned int stack = 0; stack < stacks; ++stack)
     {
-        glGenVertexArrays(1, &m_normalVAO);
-        glGenBuffers(1, &m_normalVBO);
+        for (unsigned int slice = 0; slice < slices; ++slice)
+        {
+            unsigned int first = stack * (slices + 1) + slice;
+            unsigned int second = first + slices + 1;
+
+            indices.push_back(first);
+            indices.push_back(second);
+            indices.push_back(first + 1);
+
+            indices.push_back(second);
+            indices.push_back(second + 1);
+            indices.push_back(first + 1);
+        }
     }
 
-    glBindVertexArray(m_normalVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, m_normalVBO);
-    glBufferData(GL_ARRAY_BUFFER, m_normalLines.size() * sizeof(glm::vec3),
-        m_normalLines.data(), GL_DYNAMIC_DRAW);
+    m_lightSphereIndexCount = static_cast<GLsizei>(indices.size());
 
+    glGenVertexArrays(1, &m_lightSphereVAO);
+    glGenBuffers(1, &m_lightSphereVBO);
+    glGenBuffers(1, &m_lightSphereEBO);
+
+    glBindVertexArray(m_lightSphereVAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_lightSphereVBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(glm::vec3), vertices.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
     glEnableVertexAttribArray(0);
 
-    glBindVertexArray(0);
-
-    std::cout << "Generadas " << m_normalLines.size() / 2 << " lineas de normales (por sub-mesh: " << m_normalCounts.size() << ")" << std::endl;
-}
-
-void C3DViewer::generateVertexPoints()
-{
-    m_vertexPoints.clear();
-    m_vertexOffsets.clear();
-    m_vertexCounts.clear();
-
-    // Recorremos cada sub-malla del objeto cargado para extraer sus vertices
-    for (const auto& subMesh : m_objLoader.getSubMeshes())
-    {
-        // Guardamos donde empieza este bloque de vertices en el vector global
-        int offset = (int)m_vertexPoints.size();
-        int count = 0;
-
-        for (const auto& vertex : subMesh.vertices)
-        {
-            // Metemos el vertice tal cual (coordenadas locales)
-            m_vertexPoints.push_back(vertex);
-            ++count;
-        }
-
-        // Registramos el offset y la cantidad para saber que dibujar luego
-        m_vertexOffsets.push_back(offset);
-        m_vertexCounts.push_back(count);
-    }
-
-    // Si es la primera vez, generamos los buffers en la GPU (VAO y VBO)
-    if (m_vertexVAO == 0)
-    {
-        glGenVertexArrays(1, &m_vertexVAO);
-        glGenBuffers(1, &m_vertexVBO);
-    }
-
-    // Subimos la informacion de los puntos a la memoria de video
-    glBindVertexArray(m_vertexVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, m_vertexVBO);
-    glBufferData(GL_ARRAY_BUFFER, m_vertexPoints.size() * sizeof(glm::vec3),
-        m_vertexPoints.data(), GL_DYNAMIC_DRAW);
-
-    // Definimos el layout: 3 floats (x, y, z) que entran por el layout 0
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
-    glEnableVertexAttribArray(0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_lightSphereEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
 
     glBindVertexArray(0);
 
-    // Feedback por consola para saber que todo ha ido bien
-    std::cout << "Generados " << m_vertexPoints.size() << " puntos de vertices (por sub-mesh: " << m_vertexCounts.size() << ")" << std::endl;
+    return true;
 }
 
-bool C3DViewer::setupVertexShader()
+bool C3DViewer::setupLightShader()
 {
-    // Creamos y compilamos el Vertex Shader para los puntos
+    if (m_lightShaderProgram != 0)
+        return true;
+
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexPointVertexShaderSrc, nullptr);
+    glShaderSource(vertexShader, 1, &lightIndicatorVertexShaderSrc, nullptr);
     glCompileShader(vertexShader);
-    if (!checkCompileErrors(vertexShader, "VERTEX_POINT_VERTEX")) return false;
+    if (!checkCompileErrors(vertexShader, "LIGHT_VERTEX")) return false;
 
-    // Hacemos lo mismo con el Fragment Shader (el color de los puntos)
     GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &vertexPointFragmentShaderSrc, nullptr);
+    glShaderSource(fragmentShader, 1, &lightIndicatorFragmentShaderSrc, nullptr);
     glCompileShader(fragmentShader);
-    if (!checkCompileErrors(fragmentShader, "VERTEX_POINT_FRAGMENT")) return false;
+    if (!checkCompileErrors(fragmentShader, "LIGHT_FRAGMENT")) return false;
 
-    // Creamos el programa final vinculando ambos shaders
-    m_vertexShaderProgram = glCreateProgram();
-    glAttachShader(m_vertexShaderProgram, vertexShader);
-    glAttachShader(m_vertexShaderProgram, fragmentShader);
-    glLinkProgram(m_vertexShaderProgram);
-    if (!checkCompileErrors(m_vertexShaderProgram, "VERTEX_POINT_PROGRAM")) return false;
+    m_lightShaderProgram = glCreateProgram();
+    glAttachShader(m_lightShaderProgram, vertexShader);
+    glAttachShader(m_lightShaderProgram, fragmentShader);
+    glLinkProgram(m_lightShaderProgram);
+    if (!checkCompileErrors(m_lightShaderProgram, "LIGHT_PROGRAM")) return false;
 
-    // Una vez linkeados, los objetos shader individuales ya no nos sirven, los borramos
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
     return true;
 }
 
-void C3DViewer::renderVertices()
+void C3DViewer::renderLightIndicators()
 {
-    // Si no hay nada que dibujar, salimos
-    if (m_vertexPoints.empty()) return;
+    if (m_lightShaderProgram == 0 || m_lightSphereVAO == 0)
+        return;
 
-    // Activamos el shader de los puntos
-    glUseProgram(m_vertexShaderProgram);
+    glUseProgram(m_lightShaderProgram);
 
-    // Calculamos la matriz de normalizacion (centrar y escalar el modelo original)
-    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
-    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
-    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
-
-    // Calculamos la transformacion base: traslacion * rotacion * escala/centrado
-    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
-    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
-    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
-
-    // Buscamos donde estan los parametros (uniforms) en el shader
-    GLint viewLoc = glGetUniformLocation(m_vertexShaderProgram, "view");
-    GLint projLoc = glGetUniformLocation(m_vertexShaderProgram, "projection");
-    GLint modelLoc = glGetUniformLocation(m_vertexShaderProgram, "model");
-    GLint colorLoc = glGetUniformLocation(m_vertexShaderProgram, "vertexColor");
-
-    // Pasamos las matrices de vista, proyeccion y el color elegido
-    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
-    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
-    glUniform3fv(colorLoc, 1, glm::value_ptr(m_vertexColor));
-
-    // Ajustamos el tamaño del punto en pantalla
-    glPointSize(m_vertexSize);
-
-    // Configuramos transparencia y quitamos el depth test para que los puntos se vean sobre todo
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_DEPTH_TEST);
-
-    glBindVertexArray(m_vertexVAO);
-
-    // Dibujamos cada sub-malla aplicando su propia traslacion local si la tiene
-    const auto& subMeshes = m_objLoader.getSubMeshes();
-    for (size_t i = 0; i < subMeshes.size(); ++i)
-    {
-        int offset = m_vertexOffsets[i];
-        int count = m_vertexCounts[i];
-        if (count <= 0) continue;
-
-        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMeshes[i].translation);
-        glm::mat4 model = subMeshTransform * baseModel;
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
-
-        glDrawArrays(GL_POINTS, offset, count);
-    }
-
-    glBindVertexArray(0);
-
-    glEnable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-}
-
-void C3DViewer::renderNormals()
-{
-    if (m_normalLines.empty() || !m_showNormals || !m_showNormalsPerVertex) return;
-
-    glUseProgram(m_normalShaderProgram);
-
-    // Misma logica de matrices que en el render de vertices para que coincidan perfectamente
-    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
-    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
-    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
-
-    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
-    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
-    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
-
-    GLint viewLoc = glGetUniformLocation(m_normalShaderProgram, "view");
-    GLint projLoc = glGetUniformLocation(m_normalShaderProgram, "projection");
-    GLint modelLoc = glGetUniformLocation(m_normalShaderProgram, "model");
-    GLint colorLoc = glGetUniformLocation(m_normalShaderProgram, "normalColor");
+    GLint viewLoc = glGetUniformLocation(m_lightShaderProgram, "view");
+    GLint projLoc = glGetUniformLocation(m_lightShaderProgram, "projection");
+    GLint modelLoc = glGetUniformLocation(m_lightShaderProgram, "model");
+    GLint colorLoc = glGetUniformLocation(m_lightShaderProgram, "lightColor");
 
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(m_viewMatrix));
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
-    glUniform3fv(colorLoc, 1, glm::value_ptr(m_normalColor));
 
-    // Antialiasing
-    if (m_lineAntiAlias)
+    glBindVertexArray(m_lightSphereVAO);
+
+    for (const auto& light : m_lights)
     {
-        glEnable(GL_LINE_SMOOTH);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
-    }
+        glm::vec3 displayColor = light.enabled ? light.diffuse : glm::vec3(0.1f);
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), light.position);
+        model = glm::scale(model, glm::vec3(0.12f));
 
-    glBindVertexArray(m_normalVAO);
-
-    // Dibujamos las lineas de las normales sub-malla por sub-malla
-    const auto& subMeshes = m_objLoader.getSubMeshes();
-    for (size_t i = 0; i < subMeshes.size(); ++i)
-    {
-        int offset = m_normalOffsets[i];
-        int count = m_normalCounts[i];
-        if (count <= 0) continue;
-
-        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMeshes[i].translation);
-        glm::mat4 model = subMeshTransform * baseModel;
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
-
-        glDrawArrays(GL_LINES, offset, count);
+        glUniform3fv(colorLoc, 1, glm::value_ptr(displayColor));
+        glDrawElements(GL_TRIANGLES, m_lightSphereIndexCount, GL_UNSIGNED_INT, 0);
     }
 
     glBindVertexArray(0);

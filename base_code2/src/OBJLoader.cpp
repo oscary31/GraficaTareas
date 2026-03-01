@@ -5,8 +5,49 @@
 #include <map>
 #include <algorithm>
 #include <limits>
+#include <cctype>
 #include <glad.h>
 #include <unordered_map>
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
+namespace {
+    std::string toLower(const std::string& value) {
+        std::string out = value;
+        std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+            });
+        return out;
+    }
+
+    std::string extractTexturePath(std::istringstream& iss) {
+        std::string token;
+        std::string texturePath;
+        while (iss >> token) {
+            texturePath = token;
+        }
+        return texturePath;
+    }
+
+    std::string getDirectoryPath(const std::string& path) {
+        size_t slash = path.find_last_of("/\\");
+        if (slash == std::string::npos) return "";
+        return path.substr(0, slash + 1);
+    }
+
+    bool isAbsolutePath(const std::string& path) {
+        if (path.empty()) return false;
+        if (path.size() > 1 && path[1] == ':') return true;
+        return path[0] == '/' || path[0] == '\\';
+    }
+
+    std::string joinPath(const std::string& dir, const std::string& file) {
+        if (dir.empty()) return file;
+        if (isAbsolutePath(file)) return file;
+        if (dir.back() == '/' || dir.back() == '\\') return dir + file;
+        return dir + "/" + file;
+    }
+}
 
 OBJLoader::OBJLoader()
     : m_center(0.0f), m_scaleFactor(1.0f),
@@ -21,6 +62,7 @@ OBJLoader::~OBJLoader() {
 
 void OBJLoader::clear() {
     cleanupBuffers();
+    cleanupTextures();
     m_subMeshes.clear();
     m_materials.clear();
     m_center = glm::vec3(0.0f);
@@ -40,49 +82,133 @@ bool OBJLoader::loadMTL(const std::string& mtlPath) {
     Material currentMaterial;
     std::string currentMaterialName;
     bool hasMaterial = false;
+    std::string mtlDirectory = getDirectoryPath(mtlPath);
+
+    auto finalizeCurrentMaterial = [&]() {
+        if (!hasMaterial) return;
+        applyTextureFallbacks(currentMaterial);
+        loadMaterialTextures(currentMaterial, mtlDirectory);
+        m_materials[currentMaterialName] = currentMaterial;
+        };
 
     std::string line;
     while (std::getline(file, line)) {
         std::istringstream iss(line);
         std::string prefix;
         iss >> prefix;
+        std::string lowerPrefix = toLower(prefix);
 
         // Define un nuevo material
-        if (prefix == "newmtl") {
+        if (lowerPrefix == "newmtl") {
 
-            if (hasMaterial) {
-                m_materials[currentMaterialName] = currentMaterial;
-            }
+            finalizeCurrentMaterial();
             iss >> currentMaterialName;
             currentMaterial = Material();
             currentMaterial.name = currentMaterialName;
             hasMaterial = true;
         }
         // Color difuso (Diffuse color)
-        else if (prefix == "Kd") {
+        else if (lowerPrefix == "kd") {
             iss >> currentMaterial.Kd.r >> currentMaterial.Kd.g >> currentMaterial.Kd.b;
         }
         // Color ambiental (Ambient color)
-        else if (prefix == "Ka") {
+        else if (lowerPrefix == "ka") {
             iss >> currentMaterial.Ka.r >> currentMaterial.Ka.g >> currentMaterial.Ka.b;
         }
         // Color especular (Specular color)
-        else if (prefix == "Ks") {
+        else if (lowerPrefix == "ks") {
             iss >> currentMaterial.Ks.r >> currentMaterial.Ks.g >> currentMaterial.Ks.b;
         }
+        else if (lowerPrefix == "map_ka") {
+            currentMaterial.map_Ka = extractTexturePath(iss);
+        }
         // Textura difusa
-        else if (prefix == "map_Kd") {
-            iss >> currentMaterial.map_Kd;
+        else if (lowerPrefix == "map_kd") {
+            currentMaterial.map_Kd = extractTexturePath(iss);
+        }
+        else if (lowerPrefix == "map_ks") {
+            currentMaterial.map_Ks = extractTexturePath(iss);
         }
     }
 
     // Guarda el ultimo material procesado
-    if (hasMaterial) {
-        m_materials[currentMaterialName] = currentMaterial;
-    }
+    finalizeCurrentMaterial();
 
     file.close();
     return !m_materials.empty();
+}
+
+unsigned int OBJLoader::loadTexture2D(const std::string& texturePath) {
+    if (texturePath.empty()) return 0;
+    std::string cacheKey = texturePath;
+
+    auto cacheIt = m_textureCache.find(cacheKey);
+    if (cacheIt != m_textureCache.end()) {
+        return cacheIt->second;
+    }
+
+    int width = 0, height = 0, channels = 0;
+    stbi_set_flip_vertically_on_load(false);
+    unsigned char* data = stbi_load(cacheKey.c_str(), &width, &height, &channels, 0);
+    if (!data) {
+        std::cerr << "Warning: No se pudo cargar textura: " << cacheKey
+            << " -> " << stbi_failure_reason() << std::endl;
+        return 0;
+    }
+
+    GLenum format = GL_RGB;
+    if (channels == 1) format = GL_RED;
+    else if (channels == 3) format = GL_RGB;
+    else if (channels == 4) format = GL_RGBA;
+
+    unsigned int textureId = 0;
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_2D, textureId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    stbi_image_free(data);
+    m_textureCache[cacheKey] = textureId;
+    return textureId;
+}
+
+void OBJLoader::applyTextureFallbacks(Material& material) {
+    if (material.map_Ka.empty() && !material.map_Kd.empty()) {
+        material.map_Ka = material.map_Kd;
+    }
+    if (material.map_Ks.empty() && !material.map_Kd.empty()) {
+        material.map_Ks = material.map_Kd;
+    }
+}
+
+void OBJLoader::loadMaterialTextures(Material& material, const std::string& mtlDirectory) {
+    auto resolvePath = [&](const std::string& mapPath) -> std::string {
+        if (mapPath.empty()) return "";
+        return joinPath(mtlDirectory, mapPath);
+        };
+
+    material.map_Ka = resolvePath(material.map_Ka);
+    material.map_Kd = resolvePath(material.map_Kd);
+    material.map_Ks = resolvePath(material.map_Ks);
+
+    material.ambientTexture = loadTexture2D(material.map_Ka);
+    material.diffuseTexture = loadTexture2D(material.map_Kd);
+    material.specularTexture = loadTexture2D(material.map_Ks);
+}
+
+void OBJLoader::cleanupTextures() {
+    for (const auto& entry : m_textureCache) {
+        if (entry.second != 0) {
+            unsigned int textureId = entry.second;
+            glDeleteTextures(1, &textureId);
+        }
+    }
+    m_textureCache.clear();
 }
 
 // Funcion principal que carga un archivo OBJ

@@ -8,6 +8,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
+#include <array>
 #include "imgui/imgui.h"
 #include "imgui/backends/imgui_impl_glfw.h"
 #include "imgui/backends/imgui_impl_opengl3.h"
@@ -40,40 +41,37 @@ private:
     void saveOBJFile();
     bool saveOBJWithMTL(const std::string& objPath);
 
-    // Visualizacion de normales
-    bool m_showNormals = false;
-    bool m_showNormalsPerVertex = true; // controlar ver/ocultar normales por vertice
-    float m_normalLengthPercent = 0.05f; // porcentaje (0..1) de la diagonal world del bounding box
-    glm::vec3 m_normalColor = glm::vec3(0.0f, 1.0f, 1.0f); // color editable
-    GLuint m_normalVAO = 0;
-    GLuint m_normalVBO = 0;
-    GLuint m_normalShaderProgram = 0;
-    std::vector<glm::vec3> m_normalLines;
+    // (Normal and vertex overlay visualization removed)
 
-    // para dibujar por sub-mesh (offsets/counts)
-    std::vector<int> m_normalOffsets;
-    std::vector<int> m_normalCounts;
+    struct LightSettings
+    {
+        glm::vec3 ambient = glm::vec3(0.2f);
+        glm::vec3 diffuse = glm::vec3(1.0f);
+        glm::vec3 specular = glm::vec3(1.0f);
+        float orbitRadius = 2.5f;
+        float orbitHeight = 1.0f;
+        float orbitSpeed = 0.5f;
+        float orbitAngle = 0.0f;
+        float phaseOffset = 0.0f;
+        bool enabled = true;
+        bool attenuationEnabled = true;
+        int shadingModel = 0;
+        glm::vec3 position = glm::vec3(0.0f);
+    };
 
-    bool setupNormalShader();
-    void generateNormalLines();
-    void renderNormals();
+    static constexpr int MAX_LIGHTS = 3;
+    std::array<LightSettings, MAX_LIGHTS> m_lights;
+    float m_lightAnimationSpeed = 1.0f;
+    double m_lastLightUpdateTime = 0.0;
+    float m_lightGlobalAngle = 0.0f;
 
-    // Visualizacion de vertices
-    bool m_showVertices = false;
-    float m_vertexSize = 5.0f;
-    glm::vec3 m_vertexColor = glm::vec3(1.0f, 0.0f, 0.0f); // Rojo por defecto
-    GLuint m_vertexVAO = 0;
-    GLuint m_vertexVBO = 0;
-    GLuint m_vertexShaderProgram = 0;
-    std::vector<glm::vec3> m_vertexPoints;
-
-    // Rangos por sub-mesh para dibujar partes del buffer combinado
-    std::vector<int> m_vertexOffsets;
-    std::vector<int> m_vertexCounts;
-
-    bool setupVertexShader();
-    void generateVertexPoints();
-    void renderVertices();
+    bool setupLightVisualization();
+    bool setupLightSphereMesh();
+    bool setupLightShader();
+    void initLights();
+    void updateLightAnimation(double deltaTime);
+    void uploadLightUniforms();
+    void renderLightIndicators();
 
     // Depth test y Culling
     bool m_depthTestEnabled = true;               
@@ -107,7 +105,6 @@ protected:
     // OBJ Loader
     OBJLoader m_objLoader;
     bool m_objLoaded = false;
-    int m_selectedSubMesh = -1;
 
     // Camera
     glm::vec3 m_cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -144,44 +141,21 @@ protected:
     double m_lastMouseY = 0.0;
     bool m_isDragging = false;
 
-    // Picking
-    GLuint m_pickingFBO = 0;
-    GLuint m_pickingTexture = 0;
-    GLuint m_pickingDepthBuffer = 0;
-    GLuint m_pickingShaderProgram = 0;
-
-    void setupPickingFramebuffer();
-    void renderForPicking();
-    int performPicking(int mouseX, int mouseY);
-    bool setupPickingShader();
-    void assignPickingColors();
-
-    // Bounding Box
-    GLuint m_boundingBoxVAO = 0;
-    GLuint m_boundingBoxVBO = 0;
-    GLuint m_boundingBoxEBO = 0;
-    GLuint m_boundingBoxShaderProgram = 0;
-    glm::vec3 m_boundingBoxColor = glm::vec3(1.0f, 1.0f, 0.0f); // Amarillo por defecto
-
-    // Relleno / Alambrado
-    bool m_showFill = true;                     // mostrar relleno de triangulos
-    bool m_showWireframe = false;               // mostrar alambrado
-    glm::vec3 m_wireframeColor = glm::vec3(0.0f, 0.0f, 0.0f); // color del alambrado (negro por defecto)
+    // Relleno / Alambrado (simplificado: siempre renderizamos relleno)
+    // Nota: las opciones de wireframe/bounding box se eliminaron.
 
     // Parametros para evitar z-fighting (se usan cuando se dibuja relleno)
     float m_fillPolygonOffsetFactor = 1.0f;
     float m_fillPolygonOffsetUnits = 1.0f;
 
-    void setupBoundingBox();
-    void renderBoundingBox(const SubMesh& subMesh, const glm::mat4& baseModel);
-    bool setupBoundingBoxShader();
-    void calculateSubMeshBounds(const SubMesh& subMesh, glm::vec3& minBounds, glm::vec3& maxBounds);
+
 
     // Shaders actualizados para lighting basico
     const char* vertexShaderSrc = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPos;
         layout(location = 1) in vec3 aNormal;
+        layout(location = 2) in vec2 aTexCoord;
         
         uniform mat4 model;
         uniform mat4 view;
@@ -189,11 +163,13 @@ protected:
         
         out vec3 FragPos;
         out vec3 Normal;
+        out vec2 TexCoord;
         
         void main() 
         {
             FragPos = vec3(model * vec4(aPos, 1.0));
             Normal = mat3(transpose(inverse(model))) * aNormal;
+            TexCoord = aTexCoord;
             gl_Position = projection * view * model * vec4(aPos, 1.0);
         }
     )glsl";
@@ -202,144 +178,110 @@ protected:
         #version 330 core
         in vec3 FragPos;
         in vec3 Normal;
+        in vec2 TexCoord;
         
         out vec4 FragColor;
         
-        uniform vec3 objectColor;
-        uniform vec3 lightPos;
+        const int MAX_LIGHTS = 3;
+        
         uniform vec3 viewPos;
-        uniform vec3 lightColor;
+        uniform vec3 lightPos[MAX_LIGHTS];
+        uniform vec3 lightAmbient[MAX_LIGHTS];
+        uniform vec3 lightDiffuse[MAX_LIGHTS];
+        uniform vec3 lightSpecular[MAX_LIGHTS];
+        uniform int lightEnabled[MAX_LIGHTS];
+        uniform int lightShadingModel[MAX_LIGHTS];
+        uniform int lightUseAttenuation[MAX_LIGHTS];
+        uniform vec3 materialKa;
+        uniform vec3 materialKd;
+        uniform vec3 materialKs;
+        uniform sampler2D texAmbient;
+        uniform sampler2D texDiffuse;
+        uniform sampler2D texSpecular;
+        uniform int hasAmbientMap;
+        uniform int hasDiffuseMap;
+        uniform int hasSpecularMap;
         
         void main() {
-            // Ambient
-            float ambientStrength = 0.3;
-            vec3 ambient = ambientStrength * lightColor;
-            
-            // Diffuse
+            vec3 ambientColor = (hasAmbientMap == 1) ? texture(texAmbient, TexCoord).rgb : materialKa;
+            vec3 diffuseColor = (hasDiffuseMap == 1) ? texture(texDiffuse, TexCoord).rgb : materialKd;
+            vec3 specularColor = (hasSpecularMap == 1) ? texture(texSpecular, TexCoord).rgb : materialKs;
+
             vec3 norm = normalize(Normal);
-            vec3 lightDir = normalize(lightPos - FragPos);
-            float diff = max(dot(norm, lightDir), 0.0);
-            vec3 diffuse = diff * lightColor;
-            
-            // Specular
-            float specularStrength = 0.5;
+            vec3 flatNormal = normalize(cross(dFdx(FragPos), dFdy(FragPos)));
             vec3 viewDir = normalize(viewPos - FragPos);
-            vec3 reflectDir = reflect(-lightDir, norm);
-            float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
-            vec3 specular = specularStrength * spec * lightColor;
-            
-            vec3 result = (ambient + diffuse + specular) * objectColor;
+            vec3 result = vec3(0.0);
+
+            for (int i = 0; i < MAX_LIGHTS; ++i)
+            {
+                if (lightEnabled[i] == 0) continue;
+
+                vec3 lightDir = normalize(lightPos[i] - FragPos);
+                vec3 usedNormal = (lightShadingModel[i] == 2) ? flatNormal : norm;
+                float diff = max(dot(usedNormal, lightDir), 0.0);
+
+                float attenuation = 1.0;
+                if (lightUseAttenuation[i] == 1)
+                {
+                    float dist = length(lightPos[i] - FragPos);
+                    float constant = 1.0;
+                    float linear = 0.22;
+                    float quadratic = 0.20;
+                    attenuation = 1.0 / (constant + linear * dist + quadratic * dist * dist);
+                }
+
+                vec3 ambient = lightAmbient[i] * ambientColor;
+                vec3 diffuse = diff * lightDiffuse[i] * diffuseColor;
+
+                float spec = 0.0;
+                if (lightShadingModel[i] == 1)
+                {
+                    vec3 halfway = normalize(lightDir + viewDir);
+                    spec = pow(max(dot(usedNormal, halfway), 0.0), 32.0);
+                }
+                else
+                {
+                    vec3 reflectDir = reflect(-lightDir, usedNormal);
+                    spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+                }
+
+                vec3 specular = spec * lightSpecular[i] * specularColor;
+                result += attenuation * (ambient + diffuse + specular);
+            }
+
             FragColor = vec4(result, 1.0);
         }
     )glsl";
 
-    // Shader para picking
-    const char* pickingVertexShaderSrc = R"glsl(
+    // Shaders para indicadores de luz
+    const char* lightIndicatorVertexShaderSrc = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPos;
-        
         uniform mat4 model;
         uniform mat4 view;
         uniform mat4 projection;
-        
-        void main() 
+        void main()
         {
             gl_Position = projection * view * model * vec4(aPos, 1.0);
         }
     )glsl";
 
-    const char* pickingFragmentShaderSrc = R"glsl(
+    const char* lightIndicatorFragmentShaderSrc = R"glsl(
         #version 330 core
         out vec4 FragColor;
-        
-        uniform vec3 pickingColor;
-        
-        void main() {
-            FragColor = vec4(pickingColor, 1.0);
-        }
-    )glsl";
-
-    // Shader para Bounding Box
-    const char* boundingBoxVertexShaderSrc = R"glsl(
-        #version 330 core
-        layout(location = 0) in vec3 aPos;
-        
-        uniform mat4 model;
-        uniform mat4 view;
-        uniform mat4 projection;
-        
-        void main() 
+        uniform vec3 lightColor;
+        void main()
         {
-            gl_Position = projection * view * model * vec4(aPos, 1.0);
+            FragColor = vec4(lightColor, 1.0);
         }
     )glsl";
 
-    const char* boundingBoxFragmentShaderSrc = R"glsl(
-        #version 330 core
-        out vec4 FragColor;
-        
-        uniform vec3 boxColor;
-        
-        void main() {
-            FragColor = vec4(boxColor, 1.0);
-        }
-    )glsl";
+    GLuint m_lightShaderProgram = 0;
+    GLuint m_lightSphereVAO = 0;
+    GLuint m_lightSphereVBO = 0;
+    GLuint m_lightSphereEBO = 0;
+    GLsizei m_lightSphereIndexCount = 0;
 
-    // Shader para normales 
-    const char* normalVertexShaderSrc = R"glsl(
-    #version 330 core
-    layout(location = 0) in vec3 aPos;
     
-    uniform mat4 model;
-    uniform mat4 view;
-    uniform mat4 projection;
-    
-    void main() 
-    {
-        gl_Position = projection * view * model * vec4(aPos, 1.0);
-    }
-)glsl";
-
-    const char* normalFragmentShaderSrc = R"glsl(
-    #version 330 core
-    out vec4 FragColor;
-    
-    uniform vec3 normalColor;
-    
-    void main() {
-        FragColor = vec4(normalColor, 1.0);
-    }
-)glsl";
-
-    // Shader para vertices
-    const char* vertexPointVertexShaderSrc = R"glsl(
-    #version 330 core
-    layout(location = 0) in vec3 aPos;
-    
-    uniform mat4 model;
-    uniform mat4 view;
-    uniform mat4 projection;
-    
-    void main() 
-    {
-        gl_Position = projection * view * model * vec4(aPos, 1.0);
-    }
-)glsl";
-
-    const char* vertexPointFragmentShaderSrc = R"glsl(
-    #version 330 core
-    out vec4 FragColor;
-    
-    uniform vec3 vertexColor;
-    
-    void main() {
-        // gl_PointCoord va de (0,0) a (1,1) sobre el punto rasterizado
-        vec2 coord = gl_PointCoord - vec2(0.5);
-        float dist = length(coord);
-        // Smooth edge: alpha decrece cerca del borde para antialiasing
-        float alpha = 1.0 - smoothstep(0.48, 0.5, dist);
-        if (dist > 0.5) discard; // fuera del circulo
-        FragColor = vec4(vertexColor, alpha);
-    }
-)glsl";
+    // (Normal and vertex shaders removed)
 };

@@ -3,6 +3,7 @@
 #include <vector>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <glm/glm.hpp>
 
 struct Material {
@@ -10,9 +11,17 @@ struct Material {
     glm::vec3 Kd;  
     glm::vec3 Ka;  
     glm::vec3 Ks;  
+    std::string map_Ka;
     std::string map_Kd;  
+    std::string map_Ks;
 
-    Material() : Kd(0.7f, 0.7f, 0.7f), Ka(0.0f), Ks(0.0f) {}
+    unsigned int ambientTexture;
+    unsigned int diffuseTexture;
+    unsigned int specularTexture;
+
+    Material()
+        : Kd(0.7f, 0.7f, 0.7f), Ka(0.0f), Ks(0.0f),
+        ambientTexture(0), diffuseTexture(0), specularTexture(0) {}
 };
 
 struct SubMesh {
@@ -33,11 +42,8 @@ struct SubMesh {
     // Transformacion por submesh
     glm::vec3 translation;
 
-    // Picking color ID
-    glm::vec3 pickingColor;
-
     SubMesh() : VAO(0), VBO_vertices(0), VBO_normals(0), VBO_texCoords(0), EBO(0),
-        translation(0.0f), pickingColor(0.0f) {
+        translation(0.0f) {
     }
 };
 
@@ -60,9 +66,14 @@ public:
 private:
     bool loadMTL(const std::string& mtlPath);
     void calculateNormalization();
+    unsigned int loadTexture2D(const std::string& texturePath);
+    void loadMaterialTextures(Material& material, const std::string& mtlDirectory);
+    void applyTextureFallbacks(Material& material);
+    void cleanupTextures();
 
     std::vector<SubMesh> m_subMeshes;
     std::map<std::string, Material> m_materials;
+    std::unordered_map<std::string, unsigned int> m_textureCache;
 
     glm::vec3 m_center;
     glm::vec3 m_scaleFactor;
