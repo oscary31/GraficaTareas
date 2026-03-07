@@ -31,11 +31,17 @@ private:
     virtual void update();
     virtual void render();
     virtual void drawInterface();
+    glm::vec3 getCameraMovementDirection() const;
     void resize(int new_width, int new_height);
     bool setupShader();
     bool checkCompileErrors(GLuint shader, const char* type);
     void loadOBJFile();
     void renderOBJ();
+    void placeCameraOnTable();
+    bool loadSceneProps();
+    void updateScenePropsPlacement();
+    glm::vec3 getNormalizedMinBounds(const OBJLoader& loader, const glm::vec3& scale) const;
+    glm::vec3 getNormalizedMaxBounds(const OBJLoader& loader, const glm::vec3& scale) const;
 
     // guardar OBJ + MTL con transformaciones aplicadas a vertices/normales
     void saveOBJFile();
@@ -73,6 +79,12 @@ private:
     void uploadLightUniforms();
     void renderLightIndicators();
 
+    bool setupSkybox();
+    GLuint loadSkyboxCubemap(const std::array<std::string, 6>& faces);
+    bool loadImageResized(const std::string& path, int targetWidth, int targetHeight,
+        std::vector<unsigned char>& outPixels, int& outWidth, int& outHeight);
+    void renderSkybox();
+
     // Depth test y Culling
     bool m_depthTestEnabled = true;               
     bool m_backfaceCullingEnabled = true;         
@@ -105,6 +117,10 @@ protected:
     // OBJ Loader
     OBJLoader m_objLoader;
     bool m_objLoaded = false;
+    OBJLoader m_stoveLoader;
+    OBJLoader m_howlLoader;
+    bool m_stoveLoaded = false;
+    bool m_howlLoaded = false;
 
     // Camera
     glm::vec3 m_cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -118,9 +134,10 @@ protected:
     // Camara estilo FPS
     float m_cameraYaw = -90.0f;          // grados, rumbo inicial hacia -Z
     float m_cameraPitch = 0.0f;          // grados
-    float m_cameraSpeed = 0.1f;          // distancia por pulsacion/step
+    float m_cameraSpeed = 0.03f;         // distancia por pulsacion/step
     float m_mouseSensitivity = 0.1f;     // grados por pixel de raton
-    bool m_mouseLookEnabled = true;      // permitir mirar con boton central
+    bool m_mouseLookEnabled = true;      // permitir mirar libremente con el mouse
+    int m_cameraMovementMode = 0;        // 0 = FPS, 1 = GOD
 
     // Helpers para la camara
     void computeCameraVectors();
@@ -135,10 +152,17 @@ protected:
     glm::vec3 m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
     glm::vec3 m_objectScale = glm::vec3(1.0f);
     glm::quat m_objectRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 m_stoveTranslation = glm::vec3(0.0f);
+    glm::vec3 m_stoveScale = glm::vec3(0.18f);
+    glm::quat m_stoveRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 m_howlTranslation = glm::vec3(0.0f);
+    glm::vec3 m_howlScale = glm::vec3(0.12f);
+    glm::quat m_howlRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 
     // Mouse tracking
     double m_lastMouseX = 0.0;
     double m_lastMouseY = 0.0;
+    bool m_hasMousePosition = false;
     bool m_isDragging = false;
 
     // Relleno / Alambrado (simplificado: siempre renderizamos relleno)
@@ -276,11 +300,46 @@ protected:
         }
     )glsl";
 
+    const char* skyboxVertexShaderSrc = R"glsl(
+        #version 330 core
+        layout(location = 0) in vec3 aPos;
+
+        out vec3 TexCoords;
+
+        uniform mat4 view;
+        uniform mat4 projection;
+
+        void main()
+        {
+            TexCoords = aPos;
+            vec4 pos = projection * view * vec4(aPos, 1.0);
+            gl_Position = pos.xyww;
+        }
+    )glsl";
+
+    const char* skyboxFragmentShaderSrc = R"glsl(
+        #version 330 core
+        in vec3 TexCoords;
+        out vec4 FragColor;
+
+        uniform samplerCube skybox;
+
+        void main()
+        {
+            FragColor = texture(skybox, TexCoords);
+        }
+    )glsl";
+
     GLuint m_lightShaderProgram = 0;
     GLuint m_lightSphereVAO = 0;
     GLuint m_lightSphereVBO = 0;
     GLuint m_lightSphereEBO = 0;
     GLsizei m_lightSphereIndexCount = 0;
+
+    GLuint m_skyboxShaderProgram = 0;
+    GLuint m_skyboxVAO = 0;
+    GLuint m_skyboxVBO = 0;
+    GLuint m_skyboxTexture = 0;
 
     
     // (Normal and vertex shaders removed)

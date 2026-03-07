@@ -58,6 +58,8 @@ public:
     const std::vector<SubMesh>& getSubMeshes() const { return m_subMeshes; }
     glm::vec3 getCenter() const { return m_center; }
     glm::vec3 getScaleFactor() const { return m_scaleFactor; }
+    glm::vec3 getMinBounds() const { return m_minBounds; }
+    glm::vec3 getMaxBounds() const { return m_maxBounds; }
 
     void setupBuffers();
     void cleanupBuffers();

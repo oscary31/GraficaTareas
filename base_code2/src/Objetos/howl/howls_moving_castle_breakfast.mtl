@@ -1,0 +1,63 @@
+# MTL file - created by a modified js OBJExporter
+
+newmtl baconEggs
+Tr 0.0000
+Tf 1.0000 1.0000 1.0000
+illum 1
+Pr 0.8042929062619704
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 0.8225334257519654 0.8225334257519654 0.8225334257519654
+Ke 0.6859195349883564 0.6859195349883564 0.6859195349883564
+map_Kd baconEggs.png
+map_Ke baconEggs.png
+map_Pm metalnessMap1.png
+map_Pr metalnessMap1.png
+map_Ka metalnessMap1.png
+
+newmtl line_art
+Tr 0.0000
+Tf 1.0000 1.0000 1.0000
+illum 1
+Pr 1
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 0 0 0
+Ke 0 0 0
+
+newmtl material
+Tr 0.0000
+Tf 1.0000 1.0000 1.0000
+illum 1
+Pr 1
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 0 0 0
+Ke 0.06869935196484106 0.02231147360567232 0
+
+newmtl oil_line_art
+Tr 0.0000
+Tf 1.0000 1.0000 1.0000
+illum 1
+Pr 1
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 0 0 0
+Ke 0.5540790912347202 0.30041751082020457 0.06980875991307585
+
+newmtl fire
+Tr 0.0000
+Tf 1.0000 1.0000 1.0000
+illum 1
+Pr 1
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 0.5246049407487126 0.5246049407487126 0.5246049407487126
+Ke 0.6859195349883564 0.6859195349883564 0.6859195349883564
+map_Kd fire.png
+map_Ke fire.png

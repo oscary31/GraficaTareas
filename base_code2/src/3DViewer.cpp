@@ -2,10 +2,13 @@
 #include "3DViewer.h"
 #include <iostream>
 #include <cmath> 
+#include <algorithm>
+#include <cstring>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtc/constants.hpp>
 #include "tinyfiledialogs.h"
+#include <stb_image.h>
 
 C3DViewer::C3DViewer()
 {
@@ -22,6 +25,10 @@ C3DViewer::~C3DViewer()
     if (m_lightSphereVAO) glDeleteVertexArrays(1, &m_lightSphereVAO);
     if (m_lightSphereVBO) glDeleteBuffers(1, &m_lightSphereVBO);
     if (m_lightSphereEBO) glDeleteBuffers(1, &m_lightSphereEBO);
+    if (m_skyboxShaderProgram) glDeleteProgram(m_skyboxShaderProgram);
+    if (m_skyboxVAO) glDeleteVertexArrays(1, &m_skyboxVAO);
+    if (m_skyboxVBO) glDeleteBuffers(1, &m_skyboxVBO);
+    if (m_skyboxTexture) glDeleteTextures(1, &m_skyboxTexture);
     // Normal/vertex overlay resources removed
     if (m_window) glfwDestroyWindow(m_window);
     glfwTerminate();
@@ -92,6 +99,11 @@ bool C3DViewer::setup()
     if (!setupShader()) return false;
     initLights();
     if (!setupLightVisualization()) return false;
+    if (!setupSkybox())
+    {
+        std::cerr << "Warning: No se pudo cargar la skybox." << std::endl;
+    }
+    loadOBJFile();
 
     if (width <= 0 || height <= 0)
     {
@@ -106,17 +118,19 @@ bool C3DViewer::setup()
     glfwSetKeyCallback(m_window, keyCallbackStatic);
     glfwSetMouseButtonCallback(m_window, mouseButtonCallbackStatic);
     glfwSetCursorPosCallback(m_window, cursorPosCallbackStatic);
+    glfwGetCursorPos(m_window, &m_lastMouseX, &m_lastMouseY);
+    m_hasMousePosition = true;
 
     m_projectionMatrix = glm::perspective(glm::radians(45.0f),
         (float)width / (float)height,
-        0.1f, 100.0f);
+        0.01f, 100.0f);
 
     // Inicializar vectores de camara a partir de posicion/target actuales
     m_cameraFront = glm::normalize(m_cameraTarget - m_cameraPos);
     // Derivar yaw/pitch desde front
     m_cameraYaw = glm::degrees(std::atan2(m_cameraFront.z, m_cameraFront.x));
     m_cameraPitch = glm::degrees(std::asin(glm::clamp(m_cameraFront.y, -1.0f, 1.0f)));
-    m_worldUp = m_cameraUp;
+    m_worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
     computeCameraVectors();
     updateViewMatrix();
 
@@ -184,30 +198,65 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
             glfwSetWindowShouldClose(m_window, GLFW_TRUE);
         else if (key == GLFW_KEY_O)
             loadOBJFile();
+        else if (m_cameraMovementMode == 1)
+        {
+            glm::vec3 delta(0.0f);
+            glm::vec3 planarForward(m_cameraFront.x, 0.0f, m_cameraFront.z);
+            if (glm::length(planarForward) > 1e-6f)
+                planarForward = glm::normalize(planarForward);
+            else
+                planarForward = glm::vec3(0.0f, 0.0f, -1.0f);
+
+            glm::vec3 planarRight(m_cameraRight.x, 0.0f, m_cameraRight.z);
+            if (glm::length(planarRight) > 1e-6f)
+                planarRight = glm::normalize(planarRight);
+            else
+                planarRight = glm::vec3(1.0f, 0.0f, 0.0f);
+
+            if (key == GLFW_KEY_W)
+                delta += planarForward * m_cameraSpeed;
+            else if (key == GLFW_KEY_S)
+                delta -= planarForward * m_cameraSpeed;
+            else if (key == GLFW_KEY_A)
+                delta -= planarRight * m_cameraSpeed;
+            else if (key == GLFW_KEY_D)
+                delta += planarRight * m_cameraSpeed;
+            else if (key == GLFW_KEY_E)
+                delta -= m_worldUp * m_cameraSpeed;
+            else if (key == GLFW_KEY_Q)
+                delta += m_worldUp * m_cameraSpeed;
+
+            if (glm::length(delta) > 0.0f)
+            {
+                m_cameraPos += delta;
+                m_cameraTarget += delta;
+                updateViewMatrix();
+            }
+        }
         // MOVIMIENTO CAMERA - adelante / atras en direccion front (UP / DOWN)
         else if (key == GLFW_KEY_UP)
         {
-            glm::vec3 delta = m_cameraFront * m_cameraSpeed;
+            glm::vec3 delta = getCameraMovementDirection() * m_cameraSpeed;
             m_cameraPos += delta;
             m_cameraTarget += delta;
             updateViewMatrix();
         }
         else if (key == GLFW_KEY_DOWN)
         {
-            glm::vec3 delta = m_cameraFront * m_cameraSpeed;
+            glm::vec3 delta = getCameraMovementDirection() * m_cameraSpeed;
             m_cameraPos -= delta;
             m_cameraTarget -= delta;
             updateViewMatrix();
         }
         // ROTACION CAMERA con teclas LEFT/RIGHT (gira yaw)
-        else if (key == GLFW_KEY_LEFT)
+        else if (m_cameraMovementMode == 0 && key == GLFW_KEY_LEFT)
         {
             float step = 5.0f; // grados por pulsacion
             m_cameraYaw -= step;
             computeCameraVectors();
             updateViewMatrix();
         }
-        else if (key == GLFW_KEY_RIGHT)
+        else if (m_cameraMovementMode == 0 && key == GLFW_KEY_RIGHT)
         {
             float step = 5.0f;
             m_cameraYaw += step;
@@ -215,6 +264,18 @@ void C3DViewer::onKey(int key, int scancode, int action, int mods)
             updateViewMatrix();
         }
     }
+}
+
+glm::vec3 C3DViewer::getCameraMovementDirection() const
+{
+    if (m_cameraMovementMode == 1)
+        return m_cameraFront;
+
+    glm::vec3 moveDirection(m_cameraFront.x, 0.0f, m_cameraFront.z);
+    if (glm::length(moveDirection) <= 1e-6f)
+        return glm::vec3(0.0f, 0.0f, -1.0f);
+
+    return glm::normalize(moveDirection);
 }
 
 
@@ -233,7 +294,14 @@ void C3DViewer::onMouseButton(int button, int action, int mods)
 
         if (action == GLFW_PRESS)
         {
-            mouseButtonsDown[button] = true;
+            if (m_cameraMovementMode == 0)
+            {
+                mouseButtonsDown[button] = (button == GLFW_MOUSE_BUTTON_LEFT);
+            }
+            else
+            {
+                mouseButtonsDown[button] = true;
+            }
             m_lastMouseX = xpos;
             m_lastMouseY = ypos;
 
@@ -253,17 +321,23 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
     if (io.WantCaptureMouse) {
         m_lastMouseX = xpos;
         m_lastMouseY = ypos;
+        m_hasMousePosition = true;
+        return;
+    }
+
+    if (!m_hasMousePosition)
+    {
+        m_lastMouseX = xpos;
+        m_lastMouseY = ypos;
+        m_hasMousePosition = true;
         return;
     }
 
     double deltaX = xpos - m_lastMouseX;
     double deltaY = ypos - m_lastMouseY;
 
-    // Si mantiene pulsado boton izquierdo el codigo existente rota el objeto;
-    // si mantiene pulsado boton medio (wheel) rotamos la camara (mouse-look)
-    if (mouseButtonsDown[GLFW_MOUSE_BUTTON_MIDDLE] && m_mouseLookEnabled)
+    if (m_mouseLookEnabled && mouseButtonsDown[GLFW_MOUSE_BUTTON_LEFT])
     {
-        m_isDragging = true;
         // sensibilidad: grados por pixel
         float sx = static_cast<float>(deltaX) * m_mouseSensitivity;
         float sy = static_cast<float>(deltaY) * m_mouseSensitivity;
@@ -279,38 +353,21 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
         computeCameraVectors();
         updateViewMatrix();
     }
-    else
+
+    // Mantener comportamiento previo para rotar/trasladar objeto
+    if (m_cameraMovementMode != 0 && mouseButtonsDown[GLFW_MOUSE_BUTTON_RIGHT])
     {
-        // Mantener comportamiento previo para rotar/trasladar objeto
-        if (mouseButtonsDown[GLFW_MOUSE_BUTTON_LEFT])
-        {
-            m_isDragging = true;
+        m_isDragging = true;
 
-            float sensitivity = 0.005f;
-            float angleX = static_cast<float>(deltaY) * sensitivity;
-            float angleY = static_cast<float>(deltaX) * sensitivity;
+        float sensitivity = 0.002f;
+        glm::vec3 translation(
+            static_cast<float>(deltaX) * sensitivity,
+            static_cast<float>(-deltaY) * sensitivity,
+            0.0f
+        );
 
-            glm::quat qx = glm::angleAxis(angleX, glm::vec3(1.0f, 0.0f, 0.0f));
-            glm::quat qy = glm::angleAxis(angleY, glm::vec3(0.0f, 1.0f, 0.0f));
-
-            m_objectRotation = qy * qx * m_objectRotation;
-            m_objectRotation = glm::normalize(m_objectRotation);
-        }
-
-        if (mouseButtonsDown[GLFW_MOUSE_BUTTON_RIGHT])
-        {
-            m_isDragging = true;
-
-            float sensitivity = 0.002f;
-            glm::vec3 translation(
-                static_cast<float>(deltaX) * sensitivity,
-                static_cast<float>(-deltaY) * sensitivity,
-                0.0f
-            );
-
-            // Trasladar objeto completo
-            m_objectTranslation += translation;
-        }
+        // Trasladar objeto completo
+        m_objectTranslation += translation;
     }
 
     m_lastMouseX = xpos;
@@ -319,31 +376,135 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
 
 void C3DViewer::loadOBJFile()
 {
-    // Abre dialog y carga un archivo OBJ en memoria
-    const char* filterPatterns[1] = { "*.obj" };
-    const char* filePath = tinyfd_openFileDialog(
-        "Seleccionar archivo OBJ",
-        "",
-        1,
-        filterPatterns,
-        "Archivos OBJ (*.obj)",
-        0
-    );
-
-    if (filePath)
+    const std::string objPath = "src/Objetos/table/table.obj";
+    std::cout << "Cargando: " << objPath << std::endl;
+    if (m_objLoader.load(objPath))
     {
-        std::cout << "Cargando: " << filePath << std::endl;
-        if (m_objLoader.load(filePath))
+        m_objLoaded = true;
+        m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
+        m_objectScale = glm::vec3(1.0f, 1.2f, 1.2f);
+        m_objectRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+        auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
+        for (auto& sm : subMeshes)
         {
-            m_objLoaded = true;
-            // overlay generation (normals/vertex points) removed
-            std::cout << "OBJ cargado exitosamente" << std::endl;
+            sm.translation = glm::vec3(0.0f);
         }
-        else
+
+        placeCameraOnTable();
+        loadSceneProps();
+        updateScenePropsPlacement();
+        std::cout << "OBJ cargado exitosamente" << std::endl;
+    }
+    else
+    {
+        std::cerr << "Error al cargar el archivo OBJ" << std::endl;
+    }
+}
+
+bool C3DViewer::loadSceneProps()
+{
+    const std::string stovePath = "src/Objetos/stove/kitchen_stove.obj";
+    const std::string howlPath = "src/Objetos/howl/howls_moving_castle_breakfast.obj";
+
+    m_stoveLoaded = m_stoveLoader.load(stovePath);
+    if (!m_stoveLoaded)
+    {
+        std::cerr << "Warning: No se pudo cargar stove: " << stovePath << std::endl;
+    }
+
+    m_howlLoaded = m_howlLoader.load(howlPath);
+    if (!m_howlLoaded)
+    {
+        std::cerr << "Warning: No se pudo cargar howl: " << howlPath << std::endl;
+    }
+
+    return m_stoveLoaded || m_howlLoaded;
+}
+
+glm::vec3 C3DViewer::getNormalizedMinBounds(const OBJLoader& loader, const glm::vec3& scale) const
+{
+    return (loader.getMinBounds() - loader.getCenter()) * loader.getScaleFactor() * scale;
+}
+
+glm::vec3 C3DViewer::getNormalizedMaxBounds(const OBJLoader& loader, const glm::vec3& scale) const
+{
+    return (loader.getMaxBounds() - loader.getCenter()) * loader.getScaleFactor() * scale;
+}
+
+void C3DViewer::updateScenePropsPlacement()
+{
+    if (!m_objLoaded)
+        return;
+
+    glm::vec3 tableMin = getNormalizedMinBounds(m_objLoader, m_objectScale);
+    glm::vec3 tableMax = getNormalizedMaxBounds(m_objLoader, m_objectScale);
+    glm::vec3 tableSize = tableMax - tableMin;
+
+    glm::vec3 tableCenterWorld = m_objectTranslation;
+    glm::vec3 toCamera = glm::vec3(m_cameraPos.x - tableCenterWorld.x, 0.0f, m_cameraPos.z - tableCenterWorld.z);
+    glm::vec3 awayFromCamera = (glm::length(toCamera) > 1e-6f)
+        ? -glm::normalize(toCamera)
+        : glm::vec3(0.0f, 0.0f, -1.0f);
+
+    glm::vec3 tableAnchor = tableCenterWorld + glm::vec3(
+        awayFromCamera.x * tableSize.x * 0.25f,
+        0.0f,
+        awayFromCamera.z * tableSize.z * 0.25f);
+    float tableTopY = m_objectTranslation.y + tableMax.y;
+
+    if (m_stoveLoaded)
+    {
+        glm::vec3 stoveMin = getNormalizedMinBounds(m_stoveLoader, m_stoveScale);
+        glm::vec3 stoveMax = getNormalizedMaxBounds(m_stoveLoader, m_stoveScale);
+
+        m_stoveTranslation = glm::vec3(
+            tableAnchor.x,
+            tableTopY - stoveMin.y,
+            tableAnchor.z);
+        m_stoveRotation = glm::quat(glm::vec3(0.0f, glm::radians(180.0f), 0.0f));
+
+        if (m_howlLoaded)
         {
-            std::cerr << "Error al cargar el archivo OBJ" << std::endl;
+            glm::vec3 howlMin = getNormalizedMinBounds(m_howlLoader, m_howlScale);
+            float stoveTopY = m_stoveTranslation.y + stoveMax.y;
+            m_howlTranslation = glm::vec3(
+                m_stoveTranslation.x,
+                stoveTopY - howlMin.y + 0.01f,
+                m_stoveTranslation.z);
+            m_howlRotation = glm::quat(glm::vec3(0.0f, glm::radians(270.0f), 0.0f));
         }
     }
+}
+
+void C3DViewer::placeCameraOnTable()
+{
+    if (!m_objLoaded)
+        return;
+
+    glm::vec3 localMin = (m_objLoader.getMinBounds() - m_objLoader.getCenter()) * m_objLoader.getScaleFactor() * m_objectScale;
+    glm::vec3 localMax = (m_objLoader.getMaxBounds() - m_objLoader.getCenter()) * m_objLoader.getScaleFactor() * m_objectScale;
+    glm::vec3 sceneSize = localMax - localMin;
+
+    float eyeHeight = std::max(0.025f, sceneSize.y * 0.08f);
+    float frontMargin = std::max(0.05f, sceneSize.z * 0.15f);
+    float startZ = localMax.z - frontMargin;
+    if (startZ < localMin.z)
+    {
+        startZ = (localMin.z + localMax.z) * 0.5f;
+    }
+
+    m_cameraPos = glm::vec3(
+        m_objectTranslation.x,
+        m_objectTranslation.y + localMax.y + eyeHeight,
+        m_objectTranslation.z + startZ);
+
+    m_cameraMovementMode = 0;
+    m_cameraYaw = -90.0f;
+    m_cameraPitch = -12.0f;
+    m_worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    computeCameraVectors();
+    updateViewMatrix();
 }
 
 void C3DViewer::renderOBJ()
@@ -386,38 +547,61 @@ void C3DViewer::renderOBJ()
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(m_fillPolygonOffsetFactor, m_fillPolygonOffsetUnits);
 
-        for (size_t i = 0; i < m_objLoader.getSubMeshes().size(); ++i)
+        auto renderLoader = [&](const OBJLoader& loader, const glm::vec3& translation, const glm::vec3& scale, const glm::quat& rotation)
         {
-            const auto& subMesh = m_objLoader.getSubMeshes()[i];
+            glm::mat4 normalizationMatrix = glm::mat4(1.0f);
+            normalizationMatrix = glm::scale(normalizationMatrix, loader.getScaleFactor() * scale);
+            normalizationMatrix = glm::translate(normalizationMatrix, -loader.getCenter());
 
-            glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
-            m_modelMatrix = subMeshTransform * baseModel;
+            glm::mat4 rotationMatrix = glm::mat4_cast(rotation);
+            glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), translation);
+            glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
 
-            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
+            for (size_t i = 0; i < loader.getSubMeshes().size(); ++i)
+            {
+                const auto& subMesh = loader.getSubMeshes()[i];
 
-            const Material& material = subMesh.material;
-            glUniform3fv(materialKaLoc, 1, glm::value_ptr(material.Ka));
-            glUniform3fv(materialKdLoc, 1, glm::value_ptr(material.Kd));
-            glUniform3fv(materialKsLoc, 1, glm::value_ptr(material.Ks));
+                glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
+                m_modelMatrix = subMeshTransform * baseModel;
 
-            bool hasAmbient = material.ambientTexture != 0;
-            bool hasDiffuse = material.diffuseTexture != 0;
-            bool hasSpecular = material.specularTexture != 0;
+                glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
 
-            glUniform1i(hasAmbientMapLoc, hasAmbient ? 1 : 0);
-            glUniform1i(hasDiffuseMapLoc, hasDiffuse ? 1 : 0);
-            glUniform1i(hasSpecularMapLoc, hasSpecular ? 1 : 0);
+                const Material& material = subMesh.material;
+                glUniform3fv(materialKaLoc, 1, glm::value_ptr(material.Ka));
+                glUniform3fv(materialKdLoc, 1, glm::value_ptr(material.Kd));
+                glUniform3fv(materialKsLoc, 1, glm::value_ptr(material.Ks));
 
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, hasAmbient ? material.ambientTexture : 0);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, hasDiffuse ? material.diffuseTexture : 0);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, hasSpecular ? material.specularTexture : 0);
+                bool hasAmbient = material.ambientTexture != 0;
+                bool hasDiffuse = material.diffuseTexture != 0;
+                bool hasSpecular = material.specularTexture != 0;
 
-            glBindVertexArray(subMesh.VAO);
-            glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
-            glBindVertexArray(0);
+                glUniform1i(hasAmbientMapLoc, hasAmbient ? 1 : 0);
+                glUniform1i(hasDiffuseMapLoc, hasDiffuse ? 1 : 0);
+                glUniform1i(hasSpecularMapLoc, hasSpecular ? 1 : 0);
+
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, hasAmbient ? material.ambientTexture : 0);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, hasDiffuse ? material.diffuseTexture : 0);
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, hasSpecular ? material.specularTexture : 0);
+
+                glBindVertexArray(subMesh.VAO);
+                glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
+                glBindVertexArray(0);
+            }
+        };
+
+        renderLoader(m_objLoader, m_objectTranslation, m_objectScale, m_objectRotation);
+
+        if (m_stoveLoaded)
+        {
+            renderLoader(m_stoveLoader, m_stoveTranslation, m_stoveScale, m_stoveRotation);
+        }
+
+        if (m_howlLoaded)
+        {
+            renderLoader(m_howlLoader, m_howlTranslation, m_howlScale, m_howlRotation);
         }
 
         glActiveTexture(GL_TEXTURE0);
@@ -459,6 +643,8 @@ void C3DViewer::updateViewMatrix()
 void C3DViewer::render()
 {
     update();
+
+    renderSkybox();
 
     if (m_objLoaded)
     {
@@ -503,8 +689,22 @@ void C3DViewer::drawInterface()
 
         ImGui::Separator();
         ImGui::Text("Controles:");
-        ImGui::BulletText("Click izq + arrastrar: Rotar");
-        ImGui::BulletText("Click der + arrastrar: Trasladar");
+        const char* cameraModes[] = { "FPS", "GOD" };
+        ImGui::Combo("Modo camara", &m_cameraMovementMode, cameraModes, IM_ARRAYSIZE(cameraModes));
+        if (m_cameraMovementMode == 0)
+        {
+            ImGui::BulletText("Click izq + arrastrar: Rotar camara");
+            ImGui::BulletText("Objeto bloqueado en modo FPS");
+            ImGui::BulletText("Left/Right: Girar camara");
+            ImGui::BulletText("Up/Down: Avanzar y retroceder");
+        }
+        else
+        {
+            ImGui::BulletText("Click izq + arrastrar: Rotar camara");
+            ImGui::BulletText("W/A/S/D: Mover camara");
+            ImGui::BulletText("Q/E: Bajar/Subir camara");
+            ImGui::BulletText("Click der + arrastrar: Trasladar objeto");
+        }
 
         // Render: fondo, FPS, antialiasing, depth-test y culling
         ImGui::Separator();
@@ -622,6 +822,8 @@ void C3DViewer::drawInterface()
             {
                 sm.translation = glm::vec3(0.0f);
             }
+
+            updateScenePropsPlacement();
         }
 
         if (ImGui::Button("Resetear Transformaciones"))
@@ -635,6 +837,8 @@ void C3DViewer::drawInterface()
             {
                 sm.translation = glm::vec3(0.0f);
             }
+
+            updateScenePropsPlacement();
         }
 
         // (Opciones de bounding box removidas)
@@ -660,7 +864,7 @@ void C3DViewer::resize(int new_width, int new_height)
     glViewport(0, 0, width, height);
     m_projectionMatrix = glm::perspective(glm::radians(45.0f),
         (float)width / (float)height,
-        0.1f, 100.0f);
+        0.01f, 100.0f);
 
 }
 
@@ -956,6 +1160,301 @@ void C3DViewer::renderLightIndicators()
     }
 
     glBindVertexArray(0);
+}
+
+bool C3DViewer::setupSkybox()
+{
+    if (m_skyboxVAO == 0)
+    {
+        float skyboxVertices[] = {
+            -1.0f,  1.0f, -1.0f,
+            -1.0f, -1.0f, -1.0f,
+             1.0f, -1.0f, -1.0f,
+             1.0f, -1.0f, -1.0f,
+             1.0f,  1.0f, -1.0f,
+            -1.0f,  1.0f, -1.0f,
+
+            -1.0f, -1.0f,  1.0f,
+            -1.0f, -1.0f, -1.0f,
+            -1.0f,  1.0f, -1.0f,
+            -1.0f,  1.0f, -1.0f,
+            -1.0f,  1.0f,  1.0f,
+            -1.0f, -1.0f,  1.0f,
+
+             1.0f, -1.0f, -1.0f,
+             1.0f, -1.0f,  1.0f,
+             1.0f,  1.0f,  1.0f,
+             1.0f,  1.0f,  1.0f,
+             1.0f,  1.0f, -1.0f,
+             1.0f, -1.0f, -1.0f,
+
+            -1.0f, -1.0f,  1.0f,
+            -1.0f,  1.0f,  1.0f,
+             1.0f,  1.0f,  1.0f,
+             1.0f,  1.0f,  1.0f,
+             1.0f, -1.0f,  1.0f,
+            -1.0f, -1.0f,  1.0f,
+
+            -1.0f,  1.0f, -1.0f,
+             1.0f,  1.0f, -1.0f,
+             1.0f,  1.0f,  1.0f,
+             1.0f,  1.0f,  1.0f,
+            -1.0f,  1.0f,  1.0f,
+            -1.0f,  1.0f, -1.0f,
+
+            -1.0f, -1.0f, -1.0f,
+            -1.0f, -1.0f,  1.0f,
+             1.0f, -1.0f, -1.0f,
+             1.0f, -1.0f, -1.0f,
+            -1.0f, -1.0f,  1.0f,
+             1.0f, -1.0f,  1.0f
+        };
+
+        glGenVertexArrays(1, &m_skyboxVAO);
+        glGenBuffers(1, &m_skyboxVBO);
+        glBindVertexArray(m_skyboxVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_skyboxVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), skyboxVertices, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glBindVertexArray(0);
+    }
+
+    if (m_skyboxShaderProgram == 0)
+    {
+        GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vertexShader, 1, &skyboxVertexShaderSrc, nullptr);
+        glCompileShader(vertexShader);
+        if (!checkCompileErrors(vertexShader, "SKYBOX_VERTEX")) return false;
+
+        GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fragmentShader, 1, &skyboxFragmentShaderSrc, nullptr);
+        glCompileShader(fragmentShader);
+        if (!checkCompileErrors(fragmentShader, "SKYBOX_FRAGMENT")) return false;
+
+        m_skyboxShaderProgram = glCreateProgram();
+        glAttachShader(m_skyboxShaderProgram, vertexShader);
+        glAttachShader(m_skyboxShaderProgram, fragmentShader);
+        glLinkProgram(m_skyboxShaderProgram);
+        if (!checkCompileErrors(m_skyboxShaderProgram, "PROGRAM")) return false;
+
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+
+        glUseProgram(m_skyboxShaderProgram);
+        glUniform1i(glGetUniformLocation(m_skyboxShaderProgram, "skybox"), 0);
+        glUseProgram(0);
+    }
+
+    if (m_skyboxTexture == 0)
+    {
+        
+        std::string basePath = "src/room/";
+        
+
+        std::array<std::string, 6> faces = {
+            basePath + "room/w3.jpg",
+            basePath + "room/w6.jpg",
+            basePath + "roof.jpg",
+            basePath + "floor.jpg",
+            basePath + "chim1.jpg",
+            basePath + "room/w1.jpg"
+        };
+
+        m_skyboxTexture = loadSkyboxCubemap(faces);
+        if (m_skyboxTexture == 0)
+            return false;
+    }
+
+    return true;
+}
+
+namespace
+{
+    std::vector<unsigned char> resizeRGBA(const unsigned char* src, int srcW, int srcH, int dstW, int dstH)
+    {
+        std::vector<unsigned char> dst;
+        if (!src || srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0)
+            return dst;
+
+        dst.resize(static_cast<size_t>(dstW) * dstH * 4);
+        for (int y = 0; y < dstH; ++y)
+        {
+            float v = (static_cast<float>(y) * srcH) / dstH;
+            int y0 = static_cast<int>(std::floor(v));
+            int y1 = std::min(y0 + 1, srcH - 1);
+            float fy = v - y0;
+            for (int x = 0; x < dstW; ++x)
+            {
+                float u = (static_cast<float>(x) * srcW) / dstW;
+                int x0 = static_cast<int>(std::floor(u));
+                int x1 = std::min(x0 + 1, srcW - 1);
+                float fx = u - x0;
+                for (int c = 0; c < 4; ++c)
+                {
+                    float c00 = src[(y0 * srcW + x0) * 4 + c];
+                    float c10 = src[(y0 * srcW + x1) * 4 + c];
+                    float c01 = src[(y1 * srcW + x0) * 4 + c];
+                    float c11 = src[(y1 * srcW + x1) * 4 + c];
+                    float c0 = c00 * (1.0f - fx) + c10 * fx;
+                    float c1 = c01 * (1.0f - fx) + c11 * fx;
+                    float cval = c0 * (1.0f - fy) + c1 * fy;
+                    int out = static_cast<int>(cval + 0.5f);
+                    dst[(y * dstW + x) * 4 + c] = static_cast<unsigned char>(std::min(255, std::max(0, out)));
+                }
+            }
+        }
+
+        return dst;
+    }
+}
+
+bool C3DViewer::loadImageResized(const std::string& path, int targetWidth, int targetHeight, std::vector<unsigned char>& outPixels, int& outWidth, int& outHeight)
+{
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    stbi_set_flip_vertically_on_load(false);
+    unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+    if (!data)
+    {
+        std::cerr << "Warning: No se pudo cargar imagen de skybox: " << path
+            << " -> " << stbi_failure_reason() << std::endl;
+        return false;
+    }
+
+    int finalSize = (targetWidth > 0 && targetHeight > 0)
+        ? std::min(targetWidth, targetHeight)
+        : std::min(width, height);
+    if (finalSize <= 0)
+    {
+        stbi_image_free(data);
+        return false;
+    }
+
+    if (width == finalSize && height == finalSize)
+    {
+        outPixels.assign(data, data + (finalSize * finalSize * 4));
+    }
+    else
+    {
+        auto resized = resizeRGBA(data, width, height, finalSize, finalSize);
+        if (resized.empty())
+        {
+            int xoff = std::max(0, (width - finalSize) / 2);
+            int yoff = std::max(0, (height - finalSize) / 2);
+            outPixels.resize(static_cast<size_t>(finalSize) * finalSize * 4);
+            size_t rowBytes = static_cast<size_t>(finalSize) * 4;
+            for (int r = 0; r < finalSize; ++r)
+            {
+                const unsigned char* src = data + ((r + yoff) * width + xoff) * 4;
+                unsigned char* dst = outPixels.data() + r * rowBytes;
+                std::memcpy(dst, src, rowBytes);
+            }
+        }
+        else
+        {
+            outPixels = std::move(resized);
+        }
+    }
+
+    stbi_image_free(data);
+    outWidth = finalSize;
+    outHeight = finalSize;
+    return true;
+}
+
+GLuint C3DViewer::loadSkyboxCubemap(const std::array<std::string, 6>& faces)
+{
+    GLuint textureID = 0;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
+
+    GLint previousAlignment = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousAlignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    // Fuerza que todas las caras se reescalen a 1500x1500
+    const int forcedSize = 735;
+    int targetSize = forcedSize;
+    bool allFacesLoaded = true;
+
+    for (unsigned int i = 0; i < faces.size(); ++i)
+    {
+        std::vector<unsigned char> pixels;
+        int width = 0;
+        int height = 0;
+        if (!loadImageResized(faces[i], forcedSize, forcedSize, pixels, width, height))
+        {
+            allFacesLoaded = false;
+            break;
+        }
+
+        // loadImageResized devuelve las dimensiones finales en width/height;
+        // comprobamos por seguridad que coincidan con el tamaño forzado
+        if (width != targetSize || height != targetSize)
+        {
+            std::cerr << "Warning: Skybox face size mismatch en " << faces[i]
+                << " (" << width << "x" << height << ") esperado " << targetSize << "x" << targetSize << std::endl;
+            allFacesLoaded = false;
+        }
+
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA,
+            targetSize, targetSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    }
+
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, previousAlignment);
+
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+    if (!allFacesLoaded)
+    {
+        glDeleteTextures(1, &textureID);
+        return 0;
+    }
+
+    return textureID;
+}
+
+void C3DViewer::renderSkybox()
+{
+    if (m_skyboxShaderProgram == 0 || m_skyboxVAO == 0 || m_skyboxTexture == 0)
+        return;
+
+    GLboolean wasCullingEnabled = glIsEnabled(GL_CULL_FACE);
+    if (wasCullingEnabled)
+    {
+        glDisable(GL_CULL_FACE);
+    }
+
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);
+
+    glUseProgram(m_skyboxShaderProgram);
+    glm::mat4 view = glm::mat4(glm::mat3(m_viewMatrix));
+    glUniformMatrix4fv(glGetUniformLocation(m_skyboxShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(m_skyboxShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(m_projectionMatrix));
+
+    glBindVertexArray(m_skyboxVAO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, m_skyboxTexture);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LESS);
+
+    if (wasCullingEnabled)
+    {
+        glEnable(GL_CULL_FACE);
+    }
 }
 
 void C3DViewer::saveOBJFile()
