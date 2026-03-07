@@ -484,20 +484,8 @@ void C3DViewer::updateScenePropsPlacement()
         // Si se cargo la jarra de metal, posicionarla sobre la mesa cerca del stove
         if (m_jugLoaded)
         {
-            // Ajustar escala de la jarra para que su altura sea similar a la del stove
-            glm::vec3 jugMinUn = getNormalizedMinBounds(m_jugLoader, glm::vec3(1.0f));
-            glm::vec3 jugMaxUn = getNormalizedMaxBounds(m_jugLoader, glm::vec3(1.0f));
-            float jugHeightUn = jugMaxUn.y - jugMinUn.y;
-            float stoveHeight = stoveMax.y - stoveMin.y;
-            // Sólo aplicar auto-escala si el usuario no la estableció manualmente
-            if (!m_jugScaleManual && jugHeightUn > 1e-6f)
-            {
-                // Queremos que la jarra sea ligeramente menor que el stove en altura
-                float scaleFactor = (stoveHeight / jugHeightUn) * 0.85f;
-                // No hacer un escalado extremo
-                scaleFactor = std::max(0.01f, std::min(scaleFactor, 5.0f));
-                m_jugScale = glm::vec3(scaleFactor);
-            }
+            // Aplicar escala fija solicitada por el usuario (valor final)
+            m_jugScale = glm::vec3(0.092f);
 
             glm::vec3 jugMin = getNormalizedMinBounds(m_jugLoader, m_jugScale);
             glm::vec3 jugMax = getNormalizedMaxBounds(m_jugLoader, m_jugScale);
@@ -873,15 +861,7 @@ void C3DViewer::drawInterface()
         {
         }
 
-        // Slider para escalar la jarra uniformemente
-        {
-            float jugScaleUniform = m_jugScale.x;
-            if (ImGui::SliderFloat("Escala Jarra (uniforme)", &jugScaleUniform, 0.01f, 5.0f))
-            {
-                m_jugScale = glm::vec3(jugScaleUniform);
-                m_jugScaleManual = true;
-            }
-        }
+        // Jarra: escala fija aplicada (valor final)
 
         glm::vec3 eulerAngles = glm::degrees(glm::eulerAngles(m_objectRotation));
         if (ImGui::DragFloat3("Rotacion (grados)##obj", &eulerAngles.x, 1.0f))

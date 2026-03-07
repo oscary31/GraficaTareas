@@ -169,7 +169,6 @@ protected:
     glm::vec3 m_jugTranslation = glm::vec3(0.0f);
     glm::vec3 m_jugScale = glm::vec3(0.092f);
     glm::quat m_jugRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-    bool m_jugScaleManual = true; // true when user set scale manually (via UI)
 
     // Mouse tracking
     double m_lastMouseX = 0.0;
