@@ -1,0 +1,13 @@
+# MTL file - created by a modified js OBJExporter
+
+newmtl Metal_Material
+Tr 0.0000
+Tf 1.0000 1.0000 1.0000
+illum 1
+Pm 1
+Pr 0.12940535863222768
+Pds 1
+Pl 1
+Ka 1 1 1
+Kd 0.56296 0.470753 0.453441
+Ke 0 0 0

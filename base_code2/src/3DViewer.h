@@ -71,6 +71,12 @@ private:
     double m_lastLightUpdateTime = 0.0;
     float m_lightGlobalAngle = 0.0f;
 
+    // Global white light above scene
+    bool m_globalLightEnabled = true;
+    float m_globalLightIntensity = 1.0f;
+    glm::vec3 m_globalLightColor = glm::vec3(1.0f);
+    glm::vec3 m_globalLightPosition = glm::vec3(0.0f, 3.0f, 0.0f);
+
     bool setupLightVisualization();
     bool setupLightSphereMesh();
     bool setupLightShader();
@@ -119,8 +125,10 @@ protected:
     bool m_objLoaded = false;
     OBJLoader m_stoveLoader;
     OBJLoader m_howlLoader;
+    OBJLoader m_jugLoader;
     bool m_stoveLoaded = false;
     bool m_howlLoaded = false;
+    bool m_jugLoaded = false;
 
     // Camera
     glm::vec3 m_cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -158,6 +166,10 @@ protected:
     glm::vec3 m_howlTranslation = glm::vec3(0.0f);
     glm::vec3 m_howlScale = glm::vec3(0.12f);
     glm::quat m_howlRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 m_jugTranslation = glm::vec3(0.0f);
+    glm::vec3 m_jugScale = glm::vec3(0.092f);
+    glm::quat m_jugRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    bool m_jugScaleManual = true; // true when user set scale manually (via UI)
 
     // Mouse tracking
     double m_lastMouseX = 0.0;
@@ -225,6 +237,11 @@ protected:
         uniform int hasAmbientMap;
         uniform int hasDiffuseMap;
         uniform int hasSpecularMap;
+        // Global scene light
+        uniform int globalLightEnabled;
+        uniform vec3 globalLightColor;
+        uniform vec3 globalLightPos;
+        uniform float globalLightIntensity;
         
         void main() {
             vec3 ambientColor = (hasAmbientMap == 1) ? texture(texAmbient, TexCoord).rgb : materialKa;
@@ -271,6 +288,19 @@ protected:
 
                 vec3 specular = spec * lightSpecular[i] * specularColor;
                 result += attenuation * (ambient + diffuse + specular);
+            }
+
+            // Global white light contribution (simple Phong)
+            if (globalLightEnabled == 1)
+            {
+                vec3 gLightDir = normalize(globalLightPos - FragPos);
+                vec3 gAmbient = 0.1 * globalLightColor * ambientColor * globalLightIntensity;
+                float gDiff = max(dot(norm, gLightDir), 0.0);
+                vec3 gDiffuse = gDiff * globalLightColor * diffuseColor * globalLightIntensity;
+                vec3 gReflectDir = reflect(-gLightDir, norm);
+                float gSpec = pow(max(dot(viewDir, gReflectDir), 0.0), 32.0);
+                vec3 gSpecular = gSpec * globalLightColor * specularColor * globalLightIntensity;
+                result += (gAmbient + gDiffuse + gSpecular);
             }
 
             FragColor = vec4(result, 1.0);

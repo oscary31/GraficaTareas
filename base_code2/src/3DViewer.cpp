@@ -406,6 +406,7 @@ bool C3DViewer::loadSceneProps()
 {
     const std::string stovePath = "src/Objetos/stove/kitchen_stove.obj";
     const std::string howlPath = "src/Objetos/howl/howls_moving_castle_breakfast.obj";
+    const std::string jugPath = "src/Objetos/Old_Copper_Jug_obj/Old_Copper_Jug.obj";
 
     m_stoveLoaded = m_stoveLoader.load(stovePath);
     if (!m_stoveLoaded)
@@ -417,6 +418,12 @@ bool C3DViewer::loadSceneProps()
     if (!m_howlLoaded)
     {
         std::cerr << "Warning: No se pudo cargar howl: " << howlPath << std::endl;
+    }
+
+    m_jugLoaded = m_jugLoader.load(jugPath);
+    if (!m_jugLoaded)
+    {
+        std::cerr << "Warning: No se pudo cargar jug: " << jugPath << std::endl;
     }
 
     return m_stoveLoaded || m_howlLoaded;
@@ -457,7 +464,6 @@ void C3DViewer::updateScenePropsPlacement()
     {
         glm::vec3 stoveMin = getNormalizedMinBounds(m_stoveLoader, m_stoveScale);
         glm::vec3 stoveMax = getNormalizedMaxBounds(m_stoveLoader, m_stoveScale);
-
         m_stoveTranslation = glm::vec3(
             tableAnchor.x,
             tableTopY - stoveMin.y,
@@ -469,10 +475,40 @@ void C3DViewer::updateScenePropsPlacement()
             glm::vec3 howlMin = getNormalizedMinBounds(m_howlLoader, m_howlScale);
             float stoveTopY = m_stoveTranslation.y + stoveMax.y;
             m_howlTranslation = glm::vec3(
-                m_stoveTranslation.x,
-                stoveTopY - howlMin.y + 0.01f,
-                m_stoveTranslation.z);
+                m_stoveTranslation.x + 0.05f,
+                stoveTopY - howlMin.y,
+                m_stoveTranslation.z - 0.02f );
             m_howlRotation = glm::quat(glm::vec3(0.0f, glm::radians(270.0f), 0.0f));
+        }
+
+        // Si se cargo la jarra de metal, posicionarla sobre la mesa cerca del stove
+        if (m_jugLoaded)
+        {
+            // Ajustar escala de la jarra para que su altura sea similar a la del stove
+            glm::vec3 jugMinUn = getNormalizedMinBounds(m_jugLoader, glm::vec3(1.0f));
+            glm::vec3 jugMaxUn = getNormalizedMaxBounds(m_jugLoader, glm::vec3(1.0f));
+            float jugHeightUn = jugMaxUn.y - jugMinUn.y;
+            float stoveHeight = stoveMax.y - stoveMin.y;
+            // Sólo aplicar auto-escala si el usuario no la estableció manualmente
+            if (!m_jugScaleManual && jugHeightUn > 1e-6f)
+            {
+                // Queremos que la jarra sea ligeramente menor que el stove en altura
+                float scaleFactor = (stoveHeight / jugHeightUn) * 0.85f;
+                // No hacer un escalado extremo
+                scaleFactor = std::max(0.01f, std::min(scaleFactor, 5.0f));
+                m_jugScale = glm::vec3(scaleFactor);
+            }
+
+            glm::vec3 jugMin = getNormalizedMinBounds(m_jugLoader, m_jugScale);
+            glm::vec3 jugMax = getNormalizedMaxBounds(m_jugLoader, m_jugScale);
+
+            // Tomar posicion basada en el anchor de la mesa y ajustar en X/Z
+            glm::vec3 jugPos = glm::vec3(
+                tableAnchor.x + tableSize.x * 0.5f,
+                tableTopY - jugMin.y,
+                tableAnchor.z - tableSize.z * 0.1f);
+            m_jugTranslation = jugPos;
+            m_jugRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         }
     }
 }
@@ -602,6 +638,10 @@ void C3DViewer::renderOBJ()
         if (m_howlLoaded)
         {
             renderLoader(m_howlLoader, m_howlTranslation, m_howlScale, m_howlRotation);
+        }
+        if (m_jugLoaded)
+        {
+            renderLoader(m_jugLoader, m_jugTranslation, m_jugScale, m_jugRotation);
         }
 
         glActiveTexture(GL_TEXTURE0);
@@ -774,6 +814,32 @@ void C3DViewer::drawInterface()
         ImGui::TextColored(ImVec4(0, 1, 0, 1), "Luces:");
         ImGui::SliderFloat("Velocidad animacion", &m_lightAnimationSpeed, 0.0f, 3.0f, "%.2fx");
 
+        // Global white light controls
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(1, 1, 1, 1), "Luz global:");
+        if (ImGui::Checkbox("Activa luz global", &m_globalLightEnabled)) {}
+        ImGui::ColorEdit3("Color luz global", &m_globalLightColor.x);
+        ImGui::SliderFloat("Intensidad luz global", &m_globalLightIntensity, 0.0f, 5.0f);
+        // Boton para resetear luces a configuracion por defecto
+        if (ImGui::Button("Resetear luces"))
+        {
+            // Re-inicializa luces animadas y parametros globales
+            initLights();
+            m_globalLightEnabled = true;
+            m_globalLightIntensity = 1.0f;
+            m_globalLightColor = glm::vec3(1.0f);
+        }
+        ImGui::SameLine();
+        // Boton para resetear posicion inicial de la camara
+        if (ImGui::Button("Resetear camara"))
+        {
+            // Coloca camara sobre la mesa (si hay OBJ cargado)
+            placeCameraOnTable();
+            // Garantizar que las matrices se actualizan
+            computeCameraVectors();
+            updateViewMatrix();
+        }
+
         const char* shadingModes[] = { "Phong", "Blinn-Phong", "Flat" };
         for (int i = 0; i < MAX_LIGHTS; ++i)
         {
@@ -805,6 +871,16 @@ void C3DViewer::drawInterface()
 
         if (ImGui::DragFloat3("Escala##obj", &m_objectScale.x, 0.01f, 0.01f, 10.0f))
         {
+        }
+
+        // Slider para escalar la jarra uniformemente
+        {
+            float jugScaleUniform = m_jugScale.x;
+            if (ImGui::SliderFloat("Escala Jarra (uniforme)", &jugScaleUniform, 0.01f, 5.0f))
+            {
+                m_jugScale = glm::vec3(jugScaleUniform);
+                m_jugScaleManual = true;
+            }
         }
 
         glm::vec3 eulerAngles = glm::degrees(glm::eulerAngles(m_objectRotation));
@@ -1033,6 +1109,13 @@ void C3DViewer::uploadLightUniforms()
     glUniform1iv(glGetUniformLocation(m_shaderProgram, "lightEnabled"), MAX_LIGHTS, enabled);
     glUniform1iv(glGetUniformLocation(m_shaderProgram, "lightShadingModel"), MAX_LIGHTS, shadingModels);
     glUniform1iv(glGetUniformLocation(m_shaderProgram, "lightUseAttenuation"), MAX_LIGHTS, attenuationFlags);
+
+    // Upload global light uniforms
+    glUniform1i(glGetUniformLocation(m_shaderProgram, "globalLightEnabled"), m_globalLightEnabled ? 1 : 0);
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "globalLightColor"), 1, glm::value_ptr(m_globalLightColor));
+    // Use camera position as global light position so ambient follows the camera
+    glUniform3fv(glGetUniformLocation(m_shaderProgram, "globalLightPos"), 1, glm::value_ptr(m_cameraPos));
+    glUniform1f(glGetUniformLocation(m_shaderProgram, "globalLightIntensity"), m_globalLightIntensity);
 }
 
 bool C3DViewer::setupLightVisualization()
