@@ -148,7 +148,8 @@ unsigned int OBJLoader::loadTexture2D(const std::string& texturePath) {
     }
 
     int width = 0, height = 0, channels = 0;
-    stbi_set_flip_vertically_on_load(false);
+    // OBJ/MTL + OpenGL normalmente requiere invertir Y para coincidir con UV (origen inferior).
+    stbi_set_flip_vertically_on_load(true);
     unsigned char* data = stbi_load(cacheKey.c_str(), &width, &height, &channels, 0);
     if (!data) {
         std::cerr << "Warning: No se pudo cargar textura: " << cacheKey
@@ -164,12 +165,19 @@ unsigned int OBJLoader::loadTexture2D(const std::string& texturePath) {
     unsigned int textureId = 0;
     glGenTextures(1, &textureId);
     glBindTexture(GL_TEXTURE_2D, textureId);
+
+    GLint previousUnpackAlignment = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousUnpackAlignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
     glGenerateMipmap(GL_TEXTURE_2D);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, previousUnpackAlignment);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     stbi_image_free(data);
@@ -307,6 +315,10 @@ bool OBJLoader::load(const std::string& objPath) {
                 std::cerr << "Material '" << currentMaterialName << "' no encontrado, usando color gris por defecto" << std::endl;
             }
 
+            // El mapa de indices debe ser por sub-mesh.
+            // Si se reutiliza entre sub-meshes, los indices apuntan a vertices de otro buffer.
+            vertexIndexMap.clear();
+
             hasCurrentSubMesh = true;
         }
         
@@ -315,6 +327,7 @@ bool OBJLoader::load(const std::string& objPath) {
             if (!hasCurrentSubMesh) {
                 currentSubMesh = SubMesh();
                 currentSubMesh.material = Material();
+                vertexIndexMap.clear();
                 hasCurrentSubMesh = true;
             }
 

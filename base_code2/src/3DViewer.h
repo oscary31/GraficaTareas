@@ -43,9 +43,7 @@ private:
     glm::vec3 getNormalizedMinBounds(const OBJLoader& loader, const glm::vec3& scale) const;
     glm::vec3 getNormalizedMaxBounds(const OBJLoader& loader, const glm::vec3& scale) const;
 
-    // guardar OBJ + MTL con transformaciones aplicadas a vertices/normales
-    void saveOBJFile();
-    bool saveOBJWithMTL(const std::string& objPath);
+    
 
     // (Normal and vertex overlay visualization removed)
 
@@ -82,6 +80,7 @@ private:
     bool setupLightShader();
     void initLights();
     void updateLightAnimation(double deltaTime);
+    void updateHowlPanAnimation(double deltaTime);
     void uploadLightUniforms();
     void renderLightIndicators();
 
@@ -126,9 +125,13 @@ protected:
     OBJLoader m_stoveLoader;
     OBJLoader m_howlLoader;
     OBJLoader m_jugLoader;
+    OBJLoader m_plateLoader;
+    OBJLoader m_axeLoader;
     bool m_stoveLoaded = false;
     bool m_howlLoaded = false;
     bool m_jugLoaded = false;
+    bool m_plateLoaded = false;
+    bool m_axeLoaded = false;
 
     // Camera
     glm::vec3 m_cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -145,18 +148,20 @@ protected:
     float m_cameraSpeed = 0.03f;         // distancia por pulsacion/step
     float m_mouseSensitivity = 0.1f;     // grados por pixel de raton
     bool m_mouseLookEnabled = true;      // permitir mirar libremente con el mouse
-    int m_cameraMovementMode = 0;        // 0 = FPS, 1 = GOD
+    int m_cameraMovementMode = 1;        // 0 = FPS, 1 = GOD
 
     // Helpers para la camara
     void computeCameraVectors();
     void updateViewMatrix();
+    // Render a temporary loading screen with a message (used during setup)
+    void renderLoadingScreen(const std::string& message);
 
     // Matrices
     glm::mat4 m_projectionMatrix;
     glm::mat4 m_viewMatrix;
     glm::mat4 m_modelMatrix;
 
-    // Transformaciones del objeto
+    // Transformaciones de los objetos
     glm::vec3 m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
     glm::vec3 m_objectScale = glm::vec3(1.0f);
     glm::quat m_objectRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
@@ -164,11 +169,23 @@ protected:
     glm::vec3 m_stoveScale = glm::vec3(0.18f);
     glm::quat m_stoveRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     glm::vec3 m_howlTranslation = glm::vec3(0.0f);
+    glm::vec3 m_howlBaseTranslation = glm::vec3(0.0f);
     glm::vec3 m_howlScale = glm::vec3(0.12f);
     glm::quat m_howlRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    float m_howlAnimationPhase = 0.0f;
+    float m_howlAnimationSpeed = 3.0f;
+    bool m_howlAnimationEnabled = true;
     glm::vec3 m_jugTranslation = glm::vec3(0.0f);
     glm::vec3 m_jugScale = glm::vec3(0.092f);
     glm::quat m_jugRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 m_plateTranslation = glm::vec3(0.0f);
+    glm::vec3 m_plateScale = glm::vec3(0.06f);
+    glm::quat m_plateRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 m_axeTranslation = glm::vec3(0.0f);
+    glm::vec3 m_axeScale = glm::vec3(0.09f);
+    glm::quat m_axeRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    // Per-object ambient boost (stove)
+    float m_stoveAmbientBoost = 1.0f;
 
     // Mouse tracking
     double m_lastMouseX = 0.0;
@@ -176,8 +193,6 @@ protected:
     bool m_hasMousePosition = false;
     bool m_isDragging = false;
 
-    // Relleno / Alambrado (simplificado: siempre renderizamos relleno)
-    // Nota: las opciones de wireframe/bounding box se eliminaron.
 
     // Parametros para evitar z-fighting (se usan cuando se dibuja relleno)
     float m_fillPolygonOffsetFactor = 1.0f;
@@ -233,9 +248,12 @@ protected:
         uniform sampler2D texAmbient;
         uniform sampler2D texDiffuse;
         uniform sampler2D texSpecular;
+        uniform samplerCube texEnvironment;
         uniform int hasAmbientMap;
         uniform int hasDiffuseMap;
         uniform int hasSpecularMap;
+        uniform int useEnvironmentMap;
+        uniform float environmentReflectivity;
         // Global scene light
         uniform int globalLightEnabled;
         uniform vec3 globalLightColor;
@@ -300,6 +318,15 @@ protected:
                 float gSpec = pow(max(dot(viewDir, gReflectDir), 0.0), 32.0);
                 vec3 gSpecular = gSpec * globalLightColor * specularColor * globalLightIntensity;
                 result += (gAmbient + gDiffuse + gSpecular);
+            }
+
+            if (useEnvironmentMap == 1)
+            {
+                vec3 reflectDir = reflect(-viewDir, norm);
+                vec3 envColor = texture(texEnvironment, reflectDir).rgb;
+                float specStrength = clamp(max(max(specularColor.r, specularColor.g), specularColor.b), 0.0, 1.0);
+                float mixFactor = clamp(environmentReflectivity * specStrength, 0.0, 1.0);
+                result = mix(result, envColor, mixFactor);
             }
 
             FragColor = vec4(result, 1.0);

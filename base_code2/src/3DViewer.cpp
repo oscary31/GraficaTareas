@@ -88,6 +88,9 @@ bool C3DViewer::setup()
     ImGui_ImplGlfw_InitForOpenGL(m_window, true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
+    // Mostrar un primer frame de carga para evitar ventana en blanco
+    renderLoadingScreen("Cargando escena...");
+
     glfwSetWindowUserPointer(m_window, this);
     glfwSetFramebufferSizeCallback(m_window, [](GLFWwindow* window, int w, int h) {
         auto ptr = reinterpret_cast<C3DViewer*>(glfwGetWindowUserPointer(window));
@@ -139,6 +142,40 @@ bool C3DViewer::setup()
     return true;
 }
 
+void C3DViewer::renderLoadingScreen(const std::string& message)
+{
+    if (!m_window)
+        return;
+
+    // Start a new ImGui frame and draw a centered message
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    // Fullscreen opaque window
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2((float)width, (float)height));
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0,0,0,1));
+    ImGui::Begin("##LoadingScreen", nullptr, flags);
+
+    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(message.c_str()).x) * 0.5f);
+    ImGui::SetCursorPosY((ImGui::GetWindowHeight() - ImGui::GetFontSize()) * 0.5f);
+    ImGui::Text(message.c_str());
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    ImGui::Render();
+
+    // Clear and render
+    glClearColor(m_backgroundColor.x, m_backgroundColor.y, m_backgroundColor.z, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    glfwPollEvents();
+    glfwSwapBuffers(m_window);
+}
+
 void C3DViewer::update()
 {
 
@@ -171,6 +208,7 @@ void C3DViewer::update()
     }
     m_lastLightUpdateTime = now;
     updateLightAnimation(deltaTime);
+    updateHowlPanAnimation(deltaTime);
 }
 
 void C3DViewer::mainLoop()
@@ -354,32 +392,18 @@ void C3DViewer::onCursorPos(double xpos, double ypos)
         updateViewMatrix();
     }
 
-    // Mantener comportamiento previo para rotar/trasladar objeto
-    if (m_cameraMovementMode != 0 && mouseButtonsDown[GLFW_MOUSE_BUTTON_RIGHT])
-    {
-        m_isDragging = true;
-
-        float sensitivity = 0.002f;
-        glm::vec3 translation(
-            static_cast<float>(deltaX) * sensitivity,
-            static_cast<float>(-deltaY) * sensitivity,
-            0.0f
-        );
-
-        // Trasladar objeto completo
-        m_objectTranslation += translation;
-    }
-
     m_lastMouseX = xpos;
     m_lastMouseY = ypos;
 }
 
 void C3DViewer::loadOBJFile()
 {
+	// Cargar el modelo principal (mesa)
     const std::string objPath = "src/Objetos/table/table.obj";
     std::cout << "Cargando: " << objPath << std::endl;
     if (m_objLoader.load(objPath))
     {
+        // Configuraciones iniciales para el modelo principal
         m_objLoaded = true;
         m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
         m_objectScale = glm::vec3(1.0f, 1.2f, 1.2f);
@@ -407,13 +431,15 @@ bool C3DViewer::loadSceneProps()
     const std::string stovePath = "src/Objetos/stove/kitchen_stove.obj";
     const std::string howlPath = "src/Objetos/howl/howls_moving_castle_breakfast.obj";
     const std::string jugPath = "src/Objetos/Old_Copper_Jug_obj/Old_Copper_Jug.obj";
+	const std::string platePath = "src/Objetos/plate-and-ustensils/plate-and-ustensils.obj";
+	const std::string axePath = "src/Objetos/axe/Modern_wooden_axe.obj";
 
     m_stoveLoaded = m_stoveLoader.load(stovePath);
     if (!m_stoveLoaded)
     {
         std::cerr << "Warning: No se pudo cargar stove: " << stovePath << std::endl;
     }
-
+    
     m_howlLoaded = m_howlLoader.load(howlPath);
     if (!m_howlLoaded)
     {
@@ -426,7 +452,19 @@ bool C3DViewer::loadSceneProps()
         std::cerr << "Warning: No se pudo cargar jug: " << jugPath << std::endl;
     }
 
-    return m_stoveLoaded || m_howlLoaded;
+    m_plateLoaded = m_plateLoader.load(platePath);
+    if (!m_plateLoaded)
+    {
+        std::cerr << "Warning: No se pudo cargar plate: " << platePath << std::endl;
+    }
+
+    m_axeLoaded = m_axeLoader.load(axePath);
+    if (!m_axeLoaded)
+    {
+        std::cerr << "Warning: No se pudo cargar axe: " << axePath << std::endl;
+    }
+
+    return m_stoveLoaded || m_howlLoaded || m_jugLoaded || m_plateLoaded || m_axeLoaded;
 }
 
 glm::vec3 C3DViewer::getNormalizedMinBounds(const OBJLoader& loader, const glm::vec3& scale) const
@@ -465,10 +503,10 @@ void C3DViewer::updateScenePropsPlacement()
         glm::vec3 stoveMin = getNormalizedMinBounds(m_stoveLoader, m_stoveScale);
         glm::vec3 stoveMax = getNormalizedMaxBounds(m_stoveLoader, m_stoveScale);
         m_stoveTranslation = glm::vec3(
-            tableAnchor.x,
+            tableAnchor.x - 0.3f,
             tableTopY - stoveMin.y,
             tableAnchor.z);
-        m_stoveRotation = glm::quat(glm::vec3(0.0f, glm::radians(180.0f), 0.0f));
+        m_stoveRotation = glm::quat(glm::vec3(0.0f, glm::radians(360.0f), 0.0f));
 
         if (m_howlLoaded)
         {
@@ -477,28 +515,81 @@ void C3DViewer::updateScenePropsPlacement()
             m_howlTranslation = glm::vec3(
                 m_stoveTranslation.x + 0.05f,
                 stoveTopY - howlMin.y,
-                m_stoveTranslation.z - 0.02f );
-            m_howlRotation = glm::quat(glm::vec3(0.0f, glm::radians(270.0f), 0.0f));
+                m_stoveTranslation.z +0.01 );
+            m_howlBaseTranslation = m_howlTranslation;
+            m_howlAnimationPhase = 0.0f;
+            m_howlRotation = glm::quat(glm::vec3(0.0f, glm::radians(90.0f), 0.0f));
         }
 
         // Si se cargo la jarra de metal, posicionarla sobre la mesa cerca del stove
         if (m_jugLoaded)
         {
-            // Aplicar escala fija solicitada por el usuario (valor final)
-            m_jugScale = glm::vec3(0.092f);
+            
+            m_jugScale = glm::vec3(0.12f);
 
             glm::vec3 jugMin = getNormalizedMinBounds(m_jugLoader, m_jugScale);
             glm::vec3 jugMax = getNormalizedMaxBounds(m_jugLoader, m_jugScale);
 
             // Tomar posicion basada en el anchor de la mesa y ajustar en X/Z
             glm::vec3 jugPos = glm::vec3(
-                tableAnchor.x + tableSize.x * 0.5f,
+                tableAnchor.x + tableSize.x * 0.2f,
                 tableTopY - jugMin.y,
                 tableAnchor.z - tableSize.z * 0.1f);
             m_jugTranslation = jugPos;
-            m_jugRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            m_jugRotation = glm::quat(glm::vec3(0.0f, glm::radians(90.0f), 0.0f));
         }
     }
+
+    // Position plate on the table (near the stove/anchor)
+    if (m_plateLoaded)
+    {
+        m_plateScale = glm::vec3(0.15f);
+        glm::vec3 plateMin = getNormalizedMinBounds(m_plateLoader, m_plateScale);
+        glm::vec3 plateMax = getNormalizedMaxBounds(m_plateLoader, m_plateScale);
+        glm::vec3 platePos = glm::vec3(
+            0.23f,
+            tableTopY - plateMin.y,
+            -2.876);
+        m_plateTranslation = platePos;
+        m_plateRotation = glm::quat(glm::vec3(0.0f, glm::radians(0.0f), 0.0f));
+    }
+
+    // Position axe on the table (to the side, slightly tilted)
+    if (m_axeLoaded)
+    {
+        m_axeScale = glm::vec3(0.4f, 0.3f,0.24f);
+        glm::vec3 axeMin = getNormalizedMinBounds(m_axeLoader, m_axeScale);
+        glm::vec3 axeMax = getNormalizedMaxBounds(m_axeLoader, m_axeScale);
+        /*glm::vec3 axePos = glm::vec3(
+            tableAnchor.x - tableSize.x * 0.18f,
+            tableTopY - axeMin.y,
+            tableAnchor.z - tableSize.z * 0.12f);*/
+		glm::vec3 axePos = glm::vec3(-0.27f, tableTopY - axeMin.y - 0.027f, -2.82f);
+        m_axeTranslation = axePos;
+        m_axeRotation = glm::quat(glm::vec3(glm::radians(90.0f), glm::radians(-5.0f), glm::radians(90.0f)));
+    }
+}
+
+void C3DViewer::updateHowlPanAnimation(double deltaTime)
+{
+    if (!m_howlLoaded || !m_howlAnimationEnabled)
+        return;
+
+    if (deltaTime <= 0.0)
+        return;
+
+    m_howlAnimationPhase += m_howlAnimationSpeed * static_cast<float>(deltaTime);
+    if (m_howlAnimationPhase > glm::two_pi<float>())
+    {
+        m_howlAnimationPhase = std::fmod(m_howlAnimationPhase, glm::two_pi<float>());
+    }
+
+    // Y: sube hasta +0.01 y vuelve a la base
+    float yOffset = 0.01f * (1.0f - std::cos(m_howlAnimationPhase)) * 0.5f;
+    // Z: adelante/atras +/-0.02
+    float zOffset = 0.02f * std::sin(m_howlAnimationPhase);
+
+    m_howlTranslation = m_howlBaseTranslation + glm::vec3(0.0f, yOffset, zOffset);
 }
 
 void C3DViewer::placeCameraOnTable()
@@ -523,7 +614,6 @@ void C3DViewer::placeCameraOnTable()
         m_objectTranslation.y + localMax.y + eyeHeight,
         m_objectTranslation.z + startZ);
 
-    m_cameraMovementMode = 0;
     m_cameraYaw = -90.0f;
     m_cameraPitch = -12.0f;
     m_worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
@@ -561,11 +651,14 @@ void C3DViewer::renderOBJ()
     GLint hasAmbientMapLoc = glGetUniformLocation(m_shaderProgram, "hasAmbientMap");
     GLint hasDiffuseMapLoc = glGetUniformLocation(m_shaderProgram, "hasDiffuseMap");
     GLint hasSpecularMapLoc = glGetUniformLocation(m_shaderProgram, "hasSpecularMap");
+    GLint useEnvironmentMapLoc = glGetUniformLocation(m_shaderProgram, "useEnvironmentMap");
+    GLint environmentReflectivityLoc = glGetUniformLocation(m_shaderProgram, "environmentReflectivity");
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texAmbient"), 0);
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texDiffuse"), 1);
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texSpecular"), 2);
+    glUniform1i(glGetUniformLocation(m_shaderProgram, "texEnvironment"), 3);
 
-    // 1) DIBUJAR RELLENO — siempre renderizamos el relleno de los sub-meshes
+    
     {
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glEnable(GL_POLYGON_OFFSET_FILL);
@@ -573,6 +666,10 @@ void C3DViewer::renderOBJ()
 
         auto renderLoader = [&](const OBJLoader& loader, const glm::vec3& translation, const glm::vec3& scale, const glm::quat& rotation)
         {
+            bool isPlateObject = (&loader == &m_plateLoader);
+            bool isJugObject = (&loader == &m_jugLoader);
+            bool isAxeObject = (&loader == &m_axeLoader);
+
             glm::mat4 normalizationMatrix = glm::mat4(1.0f);
             normalizationMatrix = glm::scale(normalizationMatrix, loader.getScaleFactor() * scale);
             normalizationMatrix = glm::translate(normalizationMatrix, -loader.getCenter());
@@ -599,9 +696,27 @@ void C3DViewer::renderOBJ()
                 bool hasDiffuse = material.diffuseTexture != 0;
                 bool hasSpecular = material.specularTexture != 0;
 
+                bool isAxeHeadMaterial = false;
+                if (isAxeObject)
+                {
+                    const std::string& matName = subMesh.materialName.empty() ? material.name : subMesh.materialName;
+                    isAxeHeadMaterial = (matName == "Material.002");
+                }
+
+                bool useEnvMap = (m_skyboxTexture != 0) && (isPlateObject || isJugObject || isAxeHeadMaterial);
+                float envReflectivity = 0.0f;
+                if (isAxeHeadMaterial)
+                    envReflectivity = 0.9f;
+                else if (isJugObject)
+                    envReflectivity = 0.52f;
+                else if (isPlateObject)
+                    envReflectivity = 0.28f;
+
                 glUniform1i(hasAmbientMapLoc, hasAmbient ? 1 : 0);
                 glUniform1i(hasDiffuseMapLoc, hasDiffuse ? 1 : 0);
                 glUniform1i(hasSpecularMapLoc, hasSpecular ? 1 : 0);
+                glUniform1i(useEnvironmentMapLoc, useEnvMap ? 1 : 0);
+                glUniform1f(environmentReflectivityLoc, envReflectivity);
 
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, hasAmbient ? material.ambientTexture : 0);
@@ -609,6 +724,8 @@ void C3DViewer::renderOBJ()
                 glBindTexture(GL_TEXTURE_2D, hasDiffuse ? material.diffuseTexture : 0);
                 glActiveTexture(GL_TEXTURE2);
                 glBindTexture(GL_TEXTURE_2D, hasSpecular ? material.specularTexture : 0);
+                glActiveTexture(GL_TEXTURE3);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, useEnvMap ? m_skyboxTexture : 0);
 
                 glBindVertexArray(subMesh.VAO);
                 glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
@@ -631,6 +748,15 @@ void C3DViewer::renderOBJ()
         {
             renderLoader(m_jugLoader, m_jugTranslation, m_jugScale, m_jugRotation);
         }
+        if (m_plateLoaded)
+        {
+            renderLoader(m_plateLoader, m_plateTranslation, m_plateScale, m_plateRotation);
+        }
+
+        if (m_axeLoaded)
+        {
+            renderLoader(m_axeLoader, m_axeTranslation, m_axeScale, m_axeRotation);
+        }
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, 0);
@@ -638,6 +764,8 @@ void C3DViewer::renderOBJ()
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
@@ -695,26 +823,11 @@ void C3DViewer::drawInterface()
     ImGuiWindowFlags panelFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     ImGui::Begin("Control Panel", nullptr, panelFlags);
-
-    ImGui::Text("Presiona 'O' para cargar OBJ");
-
-    if (ImGui::Button("Abrir archivo OBJ"))
-    {
-        loadOBJFile();
-    }
    
 
     if (m_objLoaded)
     { 
-        ImGui::SameLine();
-        if (ImGui::Button("Guardar OBJ modificado"))
-        {
-            saveOBJFile();
-        }
-        ImGui::Separator();
-        ImGui::Text("OBJ Cargado");
-        ImGui::Text("Submeshes: %zu", m_objLoader.getSubMeshes().size());
-
+        
         ImGui::Separator();
         ImGui::Text("Controles:");
         const char* cameraModes[] = { "FPS", "GOD" };
@@ -852,52 +965,36 @@ void C3DViewer::drawInterface()
         ImGui::Separator();
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "Transformaciones del Objeto:");
 
-
-        if (ImGui::DragFloat3("Traslacion##obj", &m_objectTranslation.x, 0.01f))
+        // Controls for scene props: plate and axe
+        if (m_plateLoaded)
         {
-        }
-
-        if (ImGui::DragFloat3("Escala##obj", &m_objectScale.x, 0.01f, 0.01f, 10.0f))
-        {
-        }
-
-        // Jarra: escala fija aplicada (valor final)
-
-        glm::vec3 eulerAngles = glm::degrees(glm::eulerAngles(m_objectRotation));
-        if (ImGui::DragFloat3("Rotacion (grados)##obj", &eulerAngles.x, 1.0f))
-        {
-            m_objectRotation = glm::quat(glm::radians(eulerAngles));
-        }
-
-        if (ImGui::Button("Centrar sub-mallas"))
-        {
-            m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
-
-            auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
-            for (auto& sm : subMeshes)
+            ImGui::Separator();
+            ImGui::Text("Plate (obj)");
+            ImGui::DragFloat3("Plate Pos", &m_plateTranslation.x, 0.01f, -10.0f, 10.0f);
+            ImGui::DragFloat3("Plate Scale", &m_plateScale.x, 0.005f, 0.001f, 10.0f);
+            // rotation in degrees for easier editing
+            glm::vec3 plateEulerDeg = glm::degrees(glm::eulerAngles(m_plateRotation));
+            float plateRotArr[3] = { plateEulerDeg.x, plateEulerDeg.y, plateEulerDeg.z };
+            if (ImGui::DragFloat3("Plate Rot (deg)", plateRotArr, 1.0f, -360.0f, 360.0f))
             {
-                sm.translation = glm::vec3(0.0f);
+                m_plateRotation = glm::quat(glm::radians(glm::vec3(plateRotArr[0], plateRotArr[1], plateRotArr[2])));
             }
-
-            updateScenePropsPlacement();
         }
 
-        if (ImGui::Button("Resetear Transformaciones"))
+        if (m_axeLoaded)
         {
-            m_objectTranslation = glm::vec3(0.0f, 0.0f, -3.0f);
-            m_objectScale = glm::vec3(1.0f);
-            m_objectRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-
-            auto& subMeshes = const_cast<std::vector<SubMesh>&>(m_objLoader.getSubMeshes());
-            for (auto& sm : subMeshes)
+            ImGui::Separator();
+            ImGui::Text("Axe (obj)");
+            ImGui::DragFloat3("Axe Pos", &m_axeTranslation.x, 0.01f, -10.0f, 10.0f);
+            ImGui::DragFloat3("Axe Scale", &m_axeScale.x, 0.005f, 0.001f, 10.0f);
+            glm::vec3 axeEulerDeg = glm::degrees(glm::eulerAngles(m_axeRotation));
+            float axeRotArr[3] = { axeEulerDeg.x, axeEulerDeg.y, axeEulerDeg.z };
+            if (ImGui::DragFloat3("Axe Rot (deg)", axeRotArr, 1.0f, -360.0f, 360.0f))
             {
-                sm.translation = glm::vec3(0.0f);
+                m_axeRotation = glm::quat(glm::radians(glm::vec3(axeRotArr[0], axeRotArr[1], axeRotArr[2])));
             }
-
-            updateScenePropsPlacement();
         }
 
-        // (Opciones de bounding box removidas)
     }
 
     ImGui::End();
@@ -998,8 +1095,6 @@ void C3DViewer::cursorPosCallbackStatic(GLFWwindow* window, double xpos, double 
 }
 
 // Bounding box functionality removed.
-
-// Normal and vertex overlay functionality removed.
 
 void C3DViewer::initLights()
 {
@@ -1518,188 +1613,4 @@ void C3DViewer::renderSkybox()
     {
         glEnable(GL_CULL_FACE);
     }
-}
-
-void C3DViewer::saveOBJFile()
-{
-    const char* filterPatterns[1] = { "*.obj" };
-    const char* filePath = tinyfd_saveFileDialog(
-        "Guardar OBJ modificado",
-        "modified.obj",
-        1,
-        filterPatterns,
-        "Archivos OBJ (*.obj)"
-    );
-
-    if (filePath)
-    {
-        std::string path(filePath);
-        if (saveOBJWithMTL(path))
-        {
-            std::cout << "OBJ guardado en: " << path << std::endl;
-        }
-        else
-        {
-            std::cerr << "Error al guardar OBJ en: " << path << std::endl;
-        }
-    }
-}
-
-bool C3DViewer::saveOBJWithMTL(const std::string& objPath)
-{
-    if (!m_objLoaded) {
-        std::cerr << "No hay OBJ cargado para exportar." << std::endl;
-        return false;
-    }
-
-    // Derivar ruta .mtl
-    std::string mtlPath = objPath;
-    size_t dot = mtlPath.find_last_of('.');
-    if (dot != std::string::npos)
-        mtlPath = mtlPath.substr(0, dot) + ".mtl";
-    else
-        mtlPath += ".mtl";
-
-    std::ofstream mtlFile(mtlPath, std::ios::out);
-    if (!mtlFile.is_open()) {
-        std::cerr << "No se pudo abrir MTL para escritura: " << mtlPath << std::endl;
-        return false;
-    }
-
-    std::ofstream objFile(objPath, std::ios::out);
-    if (!objFile.is_open()) {
-        std::cerr << "No se pudo abrir OBJ para escritura: " << objPath << std::endl;
-        mtlFile.close();
-        return false;
-    }
-
-    // Escribir referencia al MTL
-    objFile << "# Exportado por OBJ Viewer\n";
-    // Obtener solo el nombre de fichero del .mtl 
-    std::string mtlFilename;
-    size_t slash = mtlPath.find_last_of("/\\");
-    if (slash != std::string::npos)
-        mtlFilename = mtlPath.substr(slash + 1);
-    else
-        mtlFilename = mtlPath;
-    objFile << "mtllib " << mtlFilename << "\n";
-
-    // Preparar matrices globales, aplicar las mismas transformaciones que en render
-    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
-    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
-    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
-
-    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
-    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
-    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
-
-    // Colecciones globales para indices
-    size_t vertexOffset = 0;
-    size_t normalOffset = 0;
-
-    // Guardar materiales en MTL, uno por sub-mesh
-    const auto& subMeshes = m_objLoader.getSubMeshes();
-    for (size_t i = 0; i < subMeshes.size(); ++i)
-    {
-        const auto& sm = subMeshes[i];
-        std::string matName = "mat_" + std::to_string(i);
-        mtlFile << "newmtl " << matName << "\n";
-        // Kd (difuso) — usar color actual del submesh
-        mtlFile << "Kd " << std::fixed << std::setprecision(6)
-            << sm.material.Kd.r << " " << sm.material.Kd.g << " " << sm.material.Kd.b << "\n";
-        mtlFile << "Ka 0.000000 0.000000 0.000000\n";
-        mtlFile << "Ks 0.100000 0.100000 0.100000\n";
-        mtlFile << "Ns 10.0\n\n";
-    }
-
-    // Ahora escribir vertices/normales y caras en OBJ — mantener indices globales
-    // Primero, recorrer sub-meshes y volcar vertices y normales transformados
-    std::vector<glm::vec3> allNormals; allNormals.reserve(1024);
-    for (size_t i = 0; i < subMeshes.size(); ++i)
-    {
-        const auto& sm = subMeshes[i];
-        glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), sm.translation);
-        std::vector<glm::vec3> allNormals; allNormals.reserve(1024);
-        for (size_t i = 0; i < subMeshes.size(); ++i)
-        {
-            const auto& sm = subMeshes[i];
-            glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), sm.translation);
-            glm::mat4 model = baseModel * subMeshTransform;
-
-            // mat3 para normales (inv-transpose) basada en la misma matriz 'model'
-            glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(model)));
-
-            for (const auto& v : sm.vertices)
-            {
-                glm::vec4 vt = model * glm::vec4(v, 1.0f);
-                objFile << "v " << std::fixed << std::setprecision(6)
-                    << vt.x << " " << vt.y << " " << vt.z << "\n";
-            }
-
-            // normales (si existen en el submesh) tambien transformadas y normalizadas
-            if (!sm.normals.empty())
-            {
-                for (const auto& n : sm.normals)
-                {
-                    glm::vec3 nt = glm::normalize(normalMat * n);
-                    allNormals.push_back(nt);
-                    objFile << "vn " << std::fixed << std::setprecision(6)
-                        << nt.x << " " << nt.y << " " << nt.z << "\n";
-                }
-            }
-            else
-            {
-                // Si no hay normales, no escribiremos vn
-            }
-        }
-    }
-
-    // Ahora escribir las caras por sub-mesh (usando offsets)
-    vertexOffset = 0;
-    normalOffset = 0;
-    for (size_t i = 0; i < subMeshes.size(); ++i)
-    {
-        const auto& sm = subMeshes[i];
-        std::string matName = "mat_" + std::to_string(i);
-
-        objFile << "\n# SubMesh " << i << "\n";
-        objFile << "g SubMesh_" << i << "\n";
-        objFile << "usemtl " << matName << "\n";
-
-        bool hasNormals = !sm.normals.empty();
-
-        // Las caras usan indices basados en la cantidad global pasada hasta ahora
-        for (size_t f = 0; f + 2 < sm.indices.size(); f += 3)
-        {
-            int ia = sm.indices[f + 0];
-            int ib = sm.indices[f + 1];
-            int ic = sm.indices[f + 2];
-
-            // OBJ usa indices 1-based, y añadimos vertexOffset
-            if (hasNormals)
-            {
-                // asumir correspondencia vertice->normal (por indice)
-                objFile << "f "
-                    << (vertexOffset + ia + 1) << "//" << (normalOffset + ia + 1) << " "
-                    << (vertexOffset + ib + 1) << "//" << (normalOffset + ib + 1) << " "
-                    << (vertexOffset + ic + 1) << "//" << (normalOffset + ic + 1) << "\n";
-            }
-            else
-            {
-                objFile << "f "
-                    << (vertexOffset + ia + 1) << " "
-                    << (vertexOffset + ib + 1) << " "
-                    << (vertexOffset + ic + 1) << "\n";
-            }
-        }
-
-        vertexOffset += sm.vertices.size();
-        if (!sm.normals.empty())
-            normalOffset += sm.normals.size();
-    }
-
-    objFile.close();
-    mtlFile.close();
-
-    return true;
 }
