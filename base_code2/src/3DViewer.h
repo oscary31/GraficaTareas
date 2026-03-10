@@ -81,6 +81,8 @@ private:
     void initLights();
     void updateLightAnimation(double deltaTime);
     void updateHowlPanAnimation(double deltaTime);
+    void updateJugPourAnimation(double deltaTime);
+    void updatePlateCutleryAnimation(double deltaTime);
     void uploadLightUniforms();
     void renderLightIndicators();
 
@@ -176,14 +178,32 @@ protected:
     float m_howlAnimationSpeed = 3.0f;
     bool m_howlAnimationEnabled = true;
     glm::vec3 m_jugTranslation = glm::vec3(0.0f);
+    glm::vec3 m_jugBaseTranslation = glm::vec3(0.0f);
     glm::vec3 m_jugScale = glm::vec3(0.092f);
     glm::quat m_jugRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::quat m_jugBaseRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     glm::vec3 m_plateTranslation = glm::vec3(0.0f);
     glm::vec3 m_plateScale = glm::vec3(0.06f);
     glm::quat m_plateRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     glm::vec3 m_axeTranslation = glm::vec3(0.0f);
     glm::vec3 m_axeScale = glm::vec3(0.09f);
     glm::quat m_axeRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    // Jug <-> glass pour animation (glass is a plate submesh)
+    int m_plateGlassSubMeshIndex = -1;
+    glm::vec3 m_plateGlassBaseTranslation = glm::vec3(0.0f);
+    int m_plateKnifeSubMeshIndex = -1;
+    glm::vec3 m_plateKnifeBaseTranslation = glm::vec3(0.0f);
+    glm::quat m_plateKnifeBaseRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    int m_plateForkSubMeshIndex = -1;
+    glm::vec3 m_plateForkBaseTranslation = glm::vec3(0.0f);
+    glm::quat m_plateForkBaseRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    float m_jugPourAnimTime = 0.0f;
+    float m_jugPourAnimDuration = 4.0f;
+    bool m_jugPourAnimEnabled = true;
+    float m_cutleryAnimPhase = 0.0f;
+    float m_cutleryAnimSpeed = 2.2f;
+    bool m_cutleryAnimEnabled = true;
     // Per-object ambient boost (stove)
     float m_stoveAmbientBoost = 1.0f;
 

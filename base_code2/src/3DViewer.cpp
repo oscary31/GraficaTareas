@@ -209,6 +209,8 @@ void C3DViewer::update()
     m_lastLightUpdateTime = now;
     updateLightAnimation(deltaTime);
     updateHowlPanAnimation(deltaTime);
+    updateJugPourAnimation(deltaTime);
+    updatePlateCutleryAnimation(deltaTime);
 }
 
 void C3DViewer::mainLoop()
@@ -457,6 +459,10 @@ bool C3DViewer::loadSceneProps()
     {
         std::cerr << "Warning: No se pudo cargar plate: " << platePath << std::endl;
     }
+    m_plateGlassSubMeshIndex = -1;
+    m_plateGlassBaseTranslation = glm::vec3(0.0f);
+    m_plateKnifeSubMeshIndex = -1;
+    m_plateForkSubMeshIndex = -1;
 
     m_axeLoaded = m_axeLoader.load(axePath);
     if (!m_axeLoaded)
@@ -537,6 +543,8 @@ void C3DViewer::updateScenePropsPlacement()
                 tableAnchor.z - tableSize.z * 0.1f);
             m_jugTranslation = jugPos;
             m_jugRotation = glm::quat(glm::vec3(0.0f, glm::radians(90.0f), 0.0f));
+            m_jugBaseTranslation = m_jugTranslation;
+            m_jugBaseRotation = m_jugRotation;
         }
     }
 
@@ -552,6 +560,96 @@ void C3DViewer::updateScenePropsPlacement()
             -2.876);
         m_plateTranslation = platePos;
         m_plateRotation = glm::quat(glm::vec3(0.0f, glm::radians(0.0f), 0.0f));
+
+        // Find glass submesh in plate object once and cache its base translation
+        if (m_plateGlassSubMeshIndex < 0)
+        {
+            const auto& subMeshes = m_plateLoader.getSubMeshes();
+            for (size_t i = 0; i < subMeshes.size(); ++i)
+            {
+                const auto& sm = subMeshes[i];
+                if (sm.materialName.find("12_oz_glass") != std::string::npos ||
+                    sm.material.name.find("12_oz_glass") != std::string::npos)
+                {
+                    m_plateGlassSubMeshIndex = static_cast<int>(i);
+                    auto& editable = const_cast<std::vector<SubMesh>&>(m_plateLoader.getSubMeshes());
+                    m_plateGlassBaseTranslation = editable[i].translation;
+                    break;
+                }
+            }
+        }
+
+        // Find knife and fork submeshes for eating animation
+        if (m_plateKnifeSubMeshIndex < 0 || m_plateForkSubMeshIndex < 0)
+        {
+            const auto& subMeshes = m_plateLoader.getSubMeshes();
+            auto& editable = const_cast<std::vector<SubMesh>&>(m_plateLoader.getSubMeshes());
+            for (size_t i = 0; i < subMeshes.size(); ++i)
+            {
+                const auto& sm = subMeshes[i];
+                const std::string& n1 = sm.materialName;
+                const std::string& n2 = sm.material.name;
+
+                if (m_plateKnifeSubMeshIndex < 0 &&
+                    (n1.find("table_knife") != std::string::npos || n2.find("table_knife") != std::string::npos))
+                {
+                    m_plateKnifeSubMeshIndex = static_cast<int>(i);
+                    m_plateKnifeBaseTranslation = editable[i].translation;
+                    m_plateKnifeBaseRotation = editable[i].rotation;
+                }
+
+                if (m_plateForkSubMeshIndex < 0 &&
+                    (n1.find("fork") != std::string::npos || n2.find("fork") != std::string::npos))
+                {
+                    m_plateForkSubMeshIndex = static_cast<int>(i);
+                    m_plateForkBaseTranslation = editable[i].translation;
+                    m_plateForkBaseRotation = editable[i].rotation;
+                }
+            }
+
+            // Fallback: infer knife/fork as the two submeshes farthest from plate center in XZ.
+            if ((m_plateKnifeSubMeshIndex < 0 || m_plateForkSubMeshIndex < 0) && !subMeshes.empty())
+            {
+                std::vector<std::pair<float, int>> ranked;
+                ranked.reserve(subMeshes.size());
+
+                for (size_t i = 0; i < subMeshes.size(); ++i)
+                {
+                    if (static_cast<int>(i) == m_plateGlassSubMeshIndex)
+                        continue;
+
+                    const auto& sm = subMeshes[i];
+                    if (sm.vertices.empty())
+                        continue;
+
+                    glm::vec3 avg(0.0f);
+                    for (const auto& v : sm.vertices)
+                        avg += v;
+                    avg /= static_cast<float>(sm.vertices.size());
+
+                    glm::vec3 normalized = (avg - m_plateLoader.getCenter()) * m_plateLoader.getScaleFactor() * m_plateScale;
+                    glm::vec3 world = m_plateTranslation + normalized + editable[i].translation;
+                    glm::vec2 delta(world.x - m_plateTranslation.x, world.z - m_plateTranslation.z);
+                    ranked.emplace_back(glm::length(delta), static_cast<int>(i));
+                }
+
+                std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+
+                if (m_plateKnifeSubMeshIndex < 0 && !ranked.empty())
+                {
+                    m_plateKnifeSubMeshIndex = ranked[0].second;
+                    m_plateKnifeBaseTranslation = editable[m_plateKnifeSubMeshIndex].translation;
+                    m_plateKnifeBaseRotation = editable[m_plateKnifeSubMeshIndex].rotation;
+                }
+
+                if (m_plateForkSubMeshIndex < 0 && ranked.size() > 1)
+                {
+                    m_plateForkSubMeshIndex = ranked[1].second;
+                    m_plateForkBaseTranslation = editable[m_plateForkSubMeshIndex].translation;
+                    m_plateForkBaseRotation = editable[m_plateForkSubMeshIndex].rotation;
+                }
+            }
+        }
     }
 
     // Position axe on the table (to the side, slightly tilted)
@@ -590,6 +688,136 @@ void C3DViewer::updateHowlPanAnimation(double deltaTime)
     float zOffset = 0.02f * std::sin(m_howlAnimationPhase);
 
     m_howlTranslation = m_howlBaseTranslation + glm::vec3(0.0f, yOffset, zOffset);
+}
+
+void C3DViewer::updateJugPourAnimation(double deltaTime)
+{
+    if (!m_jugPourAnimEnabled || !m_jugLoaded || !m_plateLoaded || m_plateGlassSubMeshIndex < 0)
+        return;
+
+    if (deltaTime <= 0.0)
+        return;
+
+    auto& plateSubMeshes = const_cast<std::vector<SubMesh>&>(m_plateLoader.getSubMeshes());
+    if (m_plateGlassSubMeshIndex >= static_cast<int>(plateSubMeshes.size()))
+        return;
+
+    SubMesh& glassSubMesh = plateSubMeshes[m_plateGlassSubMeshIndex];
+
+    m_jugPourAnimTime += static_cast<float>(deltaTime);
+    while (m_jugPourAnimTime > m_jugPourAnimDuration)
+        m_jugPourAnimTime -= m_jugPourAnimDuration;
+
+    const float totalDuration = std::max(1.2f, m_jugPourAnimDuration);
+    const float holdDuration = 0.5f;
+    const float moveDuration = std::max(0.1f, (totalDuration - 2.0f * holdDuration) * 0.5f);
+
+    float t = std::fmod(m_jugPourAnimTime, totalDuration);
+    auto smooth01 = [](float x) {
+        x = glm::clamp(x, 0.0f, 1.0f);
+        return x * x * (3.0f - 2.0f * x);
+    };
+
+    float pourFactor = 0.0f;
+    if (t < moveDuration)
+    {
+        // Avanza hacia pose de vertido
+        pourFactor = smooth01(t / moveDuration);
+    }
+    else if (t < moveDuration + holdDuration)
+    {
+        // Mantiene vertido antes de regresar
+        pourFactor = 1.0f;
+    }
+    else if (t < moveDuration + holdDuration + moveDuration)
+    {
+        // Regresa a la pose inicial
+        float local = (t - moveDuration - holdDuration) / moveDuration;
+        pourFactor = 1.0f - smooth01(local);
+    }
+    else
+    {
+        // Espera en pose inicial antes de reiniciar animacion
+        pourFactor = 0.0f;
+    }
+
+    glm::vec3 glassWorldBase = m_plateTranslation + m_plateGlassBaseTranslation;
+    glm::vec3 toJug = m_jugBaseTranslation - glassWorldBase;
+    toJug.y = 0.0f;
+    glm::vec3 moveDir = (glm::length(toJug) > 1e-5f) ? glm::normalize(toJug) : glm::vec3(1.0f, 0.0f, 0.0f);
+
+    float glassSlideDistance = 0.18f;
+    glm::vec3 glassOffset = moveDir * (glassSlideDistance * pourFactor);
+    glassSubMesh.translation = m_plateGlassBaseTranslation + glassOffset;
+
+    float jugLift = 0.08f * pourFactor;
+    m_jugTranslation = m_jugBaseTranslation + glm::vec3(0.0f, jugLift, 0.0f);
+
+    glm::vec3 pourDir = (glassWorldBase + glassOffset) - m_jugBaseTranslation;
+    pourDir.y = 0.0f;
+    pourDir = (glm::length(pourDir) > 1e-5f) ? glm::normalize(pourDir) : glm::vec3(1.0f, 0.0f, 0.0f);
+    glm::vec3 tiltAxis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), pourDir);
+    tiltAxis = (glm::length(tiltAxis) > 1e-5f) ? glm::normalize(tiltAxis) : glm::vec3(0.0f, 0.0f, 1.0f);
+
+    float maxTilt = glm::radians(45.0f);
+    glm::quat tilt = glm::angleAxis(maxTilt * pourFactor, tiltAxis);
+    m_jugRotation = glm::normalize(tilt * m_jugBaseRotation);
+}
+
+void C3DViewer::updatePlateCutleryAnimation(double deltaTime)
+{
+    if (!m_cutleryAnimEnabled || !m_plateLoaded)
+        return;
+
+    if (deltaTime <= 0.0)
+        return;
+
+    auto& plateSubMeshes = const_cast<std::vector<SubMesh>&>(m_plateLoader.getSubMeshes());
+    if (plateSubMeshes.empty())
+        return;
+
+    m_cutleryAnimPhase += m_cutleryAnimSpeed * static_cast<float>(deltaTime);
+    if (m_cutleryAnimPhase > glm::two_pi<float>())
+        m_cutleryAnimPhase = std::fmod(m_cutleryAnimPhase, glm::two_pi<float>());
+
+    float eatFactor = 0.5f * (1.0f - std::cos(m_cutleryAnimPhase)); // 0->1->0
+
+    auto animateCutlery = [&](int index, const glm::vec3& baseTranslation, const glm::quat& baseRotation, const glm::vec3& targetOffset)
+    {
+        if (index < 0 || index >= static_cast<int>(plateSubMeshes.size()))
+            return;
+
+        auto& sm = plateSubMeshes[index];
+        float liftHeight = 0.02f;
+        // compute submesh local average (normalized) to map plate center into submesh-local translation
+        glm::vec3 normalizedAvg(0.0f);
+        if (!sm.vertices.empty())
+        {
+            glm::vec3 avg(0.0f);
+            for (const auto& v : sm.vertices)
+                avg += v;
+            avg /= static_cast<float>(sm.vertices.size());
+            normalizedAvg = (avg - m_plateLoader.getCenter()) * m_plateLoader.getScaleFactor() * m_plateScale;
+        }
+
+        // localBase is the user-editable base translation (in submesh-local space)
+        glm::vec3 localBase = baseTranslation;
+
+        // desired target in submesh-local coords to place piece above plate center plus lateral offset
+        glm::vec3 desiredWorldOffsetAbovePlate(0.0f, localBase.y + liftHeight, 0.0f);
+        glm::vec3 localTarget = desiredWorldOffsetAbovePlate - normalizedAvg + targetOffset;
+
+        glm::vec3 control = (localBase + localTarget) * 0.5f + glm::vec3(0.0f, liftHeight * 0.5f, 0.0f);
+
+        float t = eatFactor;
+        float invT = 1.0f - t;
+        glm::vec3 bezierPos = (invT * invT) * localBase + 2.0f * invT * t * control + (t * t) * localTarget;
+        sm.translation = bezierPos;
+        sm.rotation = baseRotation;
+    };
+
+    animateCutlery(m_plateKnifeSubMeshIndex, m_plateKnifeBaseTranslation, m_plateKnifeBaseRotation, glm::vec3(0.012f,0.0f,0.0f));
+    animateCutlery(m_plateForkSubMeshIndex, m_plateForkBaseTranslation, m_plateForkBaseRotation, glm::vec3(-0.012f, 0.0f, 0.0f));
 }
 
 void C3DViewer::placeCameraOnTable()
@@ -683,7 +911,8 @@ void C3DViewer::renderOBJ()
                 const auto& subMesh = loader.getSubMeshes()[i];
 
                 glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
-                m_modelMatrix = subMeshTransform * baseModel;
+                glm::mat4 subMeshRotation = glm::mat4_cast(subMesh.rotation);
+                m_modelMatrix = subMeshTransform * subMeshRotation * baseModel;
 
                 glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
 

@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 struct Material {
     std::string name;
@@ -41,9 +42,10 @@ struct SubMesh {
 
     // Transformacion por submesh
     glm::vec3 translation;
+    glm::quat rotation;
 
     SubMesh() : VAO(0), VBO_vertices(0), VBO_normals(0), VBO_texCoords(0), EBO(0),
-        translation(0.0f) {
+        translation(0.0f), rotation(1.0f, 0.0f, 0.0f, 0.0f) {
     }
 };
 
