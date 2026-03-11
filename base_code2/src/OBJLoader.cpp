@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <limits>
 #include <cctype>
+#include <cmath>
 #include <glad.h>
+#include <glm/gtc/constants.hpp>
 #include <unordered_map>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -47,6 +49,83 @@ namespace {
         if (dir.back() == '/' || dir.back() == '\\') return dir + file;
         return dir + "/" + file;
     }
+}
+
+void OBJLoader::applyTexCoordMapping(TexCoordMapping mapping) {
+    if (m_subMeshes.empty()) {
+        return;
+    }
+
+    glm::vec3 minBounds = m_minBounds;
+    glm::vec3 maxBounds = m_maxBounds;
+    glm::vec3 size = maxBounds - minBounds;
+    if (std::abs(size.x) < 1e-6f) size.x = 1.0f;
+    if (std::abs(size.y) < 1e-6f) size.y = 1.0f;
+    if (std::abs(size.z) < 1e-6f) size.z = 1.0f;
+
+    for (auto& subMesh : m_subMeshes) {
+        if (subMesh.originalTexCoords.empty()) {
+            subMesh.originalTexCoords = subMesh.texCoords;
+        }
+
+        if (mapping == TexCoordMapping::Original) {
+            subMesh.texCoords = subMesh.originalTexCoords;
+        }
+        else {
+            subMesh.texCoords.resize(subMesh.vertices.size());
+            for (size_t i = 0; i < subMesh.vertices.size(); ++i) {
+                const glm::vec3& v = subMesh.vertices[i];
+                glm::vec2 uv(0.0f);
+
+                switch (mapping) {
+                case TexCoordMapping::Spherical: {
+                    glm::vec3 p = v - m_center;
+                    float len = glm::length(p);
+                    if (len > 1e-6f) {
+                        p /= len;
+                    }
+                    float u = 0.5f + std::atan2(p.z, p.x) / (2.0f * glm::pi<float>());
+                    float vCoord = 0.5f - std::asin(glm::clamp(p.y, -1.0f, 1.0f)) / glm::pi<float>();
+                    uv = glm::vec2(u, vCoord);
+                    break;
+                }
+                case TexCoordMapping::Cylindrical: {
+                    glm::vec3 p = v - m_center;
+                    float u = 0.5f + std::atan2(p.z, p.x) / (2.0f * glm::pi<float>());
+                    float vCoord = (v.y - minBounds.y) / size.y;
+                    uv = glm::vec2(u, vCoord);
+                    break;
+                }
+                case TexCoordMapping::PlanarXY: {
+                    float u = (v.x - minBounds.x) / size.x;
+                    float vCoord = (v.y - minBounds.y) / size.y;
+                    uv = glm::vec2(u, vCoord);
+                    break;
+                }
+                case TexCoordMapping::PlanarXZ: {
+                    float u = (v.x - minBounds.x) / size.x;
+                    float vCoord = (v.z - minBounds.z) / size.z;
+                    uv = glm::vec2(u, vCoord);
+                    break;
+                }
+                default:
+                    uv = glm::vec2(0.0f);
+                    break;
+                }
+
+                uv = glm::clamp(uv, glm::vec2(0.0f), glm::vec2(1.0f));
+                subMesh.texCoords[i] = uv;
+            }
+        }
+
+        if (subMesh.VBO_texCoords != 0) {
+            glBindBuffer(GL_ARRAY_BUFFER, subMesh.VBO_texCoords);
+            glBufferData(GL_ARRAY_BUFFER, subMesh.texCoords.size() * sizeof(glm::vec2),
+                subMesh.texCoords.data(), GL_STATIC_DRAW);
+        }
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 OBJLoader::OBJLoader()
@@ -442,6 +521,12 @@ bool OBJLoader::load(const std::string& objPath) {
     // Calcula/ajusta normales si es necesario y prepara buffers
     calculateVertexNormals();
     setupBuffers();
+
+    for (auto& subMesh : m_subMeshes) {
+        if (subMesh.originalTexCoords.empty()) {
+            subMesh.originalTexCoords = subMesh.texCoords;
+        }
+    }
 
     return true;
 }

@@ -4,6 +4,8 @@
 #include <cmath> 
 #include <algorithm>
 #include <cstring>
+#include <cstddef>
+#include <limits>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtc/constants.hpp>
@@ -29,6 +31,11 @@ C3DViewer::~C3DViewer()
     if (m_skyboxVAO) glDeleteVertexArrays(1, &m_skyboxVAO);
     if (m_skyboxVBO) glDeleteBuffers(1, &m_skyboxVBO);
     if (m_skyboxTexture) glDeleteTextures(1, &m_skyboxTexture);
+    if (m_sphereVAO) glDeleteVertexArrays(1, &m_sphereVAO);
+    if (m_sphereVBO) glDeleteBuffers(1, &m_sphereVBO);
+    if (m_sphereEBO) glDeleteBuffers(1, &m_sphereEBO);
+    if (m_sphereDiffuseTexture) glDeleteTextures(1, &m_sphereDiffuseTexture);
+    if (m_sphereNormalTexture) glDeleteTextures(1, &m_sphereNormalTexture);
     // Normal/vertex overlay resources removed
     if (m_window) glfwDestroyWindow(m_window);
     glfwTerminate();
@@ -107,6 +114,10 @@ bool C3DViewer::setup()
         std::cerr << "Warning: No se pudo cargar la skybox." << std::endl;
     }
     loadOBJFile();
+    if (!setupBumpSphere())
+    {
+        std::cerr << "Warning: No se pudo crear la esfera con bump mapping." << std::endl;
+    }
 
     if (width <= 0 || height <= 0)
     {
@@ -666,6 +677,17 @@ void C3DViewer::updateScenePropsPlacement()
         m_axeTranslation = axePos;
         m_axeRotation = glm::quat(glm::vec3(glm::radians(90.0f), glm::radians(-5.0f), glm::radians(90.0f)));
     }
+
+    float sphereScale = m_jugLoaded ? (m_jugScale.x * 1.1f) : 0.12f;
+    m_sphereScale = glm::vec3(sphereScale);
+    float baseSphereRadius = 0.5f;
+    float sphereRadius = baseSphereRadius * m_sphereScale.y;
+    glm::vec3 edgePosition = tableCenterWorld + glm::vec3(
+        awayFromCamera.x * tableSize.x * 0.45f,
+        0.0f,
+        awayFromCamera.z * tableSize.z * 0.45f);
+    m_sphereTranslation = glm::vec3(edgePosition.x, tableTopY + sphereRadius, edgePosition.z);
+    m_sphereRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 }
 
 void C3DViewer::updateHowlPanAnimation(double deltaTime)
@@ -881,10 +903,12 @@ void C3DViewer::renderOBJ()
     GLint hasSpecularMapLoc = glGetUniformLocation(m_shaderProgram, "hasSpecularMap");
     GLint useEnvironmentMapLoc = glGetUniformLocation(m_shaderProgram, "useEnvironmentMap");
     GLint environmentReflectivityLoc = glGetUniformLocation(m_shaderProgram, "environmentReflectivity");
+    GLint useNormalMapLoc = glGetUniformLocation(m_shaderProgram, "useNormalMap");
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texAmbient"), 0);
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texDiffuse"), 1);
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texSpecular"), 2);
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texEnvironment"), 3);
+    glUniform1i(glGetUniformLocation(m_shaderProgram, "texNormal"), 4);
 
     
     {
@@ -892,8 +916,11 @@ void C3DViewer::renderOBJ()
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(m_fillPolygonOffsetFactor, m_fillPolygonOffsetUnits);
 
+        glUniform1i(useNormalMapLoc, 0);
+
         auto renderLoader = [&](const OBJLoader& loader, const glm::vec3& translation, const glm::vec3& scale, const glm::quat& rotation)
         {
+            uploadLightUniforms();
             bool isPlateObject = (&loader == &m_plateLoader);
             bool isJugObject = (&loader == &m_jugLoader);
             bool isAxeObject = (&loader == &m_axeLoader);
@@ -987,6 +1014,55 @@ void C3DViewer::renderOBJ()
             renderLoader(m_axeLoader, m_axeTranslation, m_axeScale, m_axeRotation);
         }
 
+        if (m_sphereVAO != 0 && m_sphereIndexCount > 0)
+        {
+            uploadLightUniforms();
+            // Temporarily reduce attenuation for the sphere so we can see diffuse contribution
+            GLint attenLoc = glGetUniformLocation(m_shaderProgram, "lightUseAttenuation");
+            if (attenLoc >= 0)
+            {
+                int noAtten[MAX_LIGHTS] = { 0 };
+                glUniform1iv(attenLoc, MAX_LIGHTS, noAtten);
+            }
+            glm::mat4 sphereTransform = glm::translate(glm::mat4(1.0f), m_sphereTranslation)
+                * glm::mat4_cast(m_sphereRotation)
+                * glm::scale(glm::mat4(1.0f), m_sphereScale);
+
+            m_modelMatrix = sphereTransform;
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
+
+            glm::vec3 sphereKa(0.3f);
+            glm::vec3 sphereKd(1.0f);
+            glm::vec3 sphereKs(0.9f);
+            glUniform3fv(materialKaLoc, 1, glm::value_ptr(sphereKa));
+            glUniform3fv(materialKdLoc, 1, glm::value_ptr(sphereKd));
+            glUniform3fv(materialKsLoc, 1, glm::value_ptr(sphereKs));
+
+            bool hasSphereDiffuse = m_sphereDiffuseTexture != 0;
+            glUniform1i(hasAmbientMapLoc, 0);
+            glUniform1i(hasDiffuseMapLoc, hasSphereDiffuse ? 1 : 0);
+            glUniform1i(hasSpecularMapLoc, 0);
+            glUniform1i(useEnvironmentMapLoc, 0);
+            glUniform1f(environmentReflectivityLoc, 0.0f);
+            glUniform1i(useNormalMapLoc, m_sphereNormalTexture != 0 ? 1 : 0);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, hasSphereDiffuse ? m_sphereDiffuseTexture : 0);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+            glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, m_sphereNormalTexture != 0 ? m_sphereNormalTexture : 0);
+
+            glBindVertexArray(m_sphereVAO);
+            glDrawElements(GL_TRIANGLES, m_sphereIndexCount, GL_UNSIGNED_INT, 0);
+            glBindVertexArray(0);
+            glUniform1i(useNormalMapLoc, 0);
+        }
+
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE1);
@@ -995,6 +1071,8 @@ void C3DViewer::renderOBJ()
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, 0);
 
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
@@ -1190,6 +1268,149 @@ void C3DViewer::drawInterface()
         }
 
         // Geometry overlay options removed (normals/vertices)
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "Mapeo de texturas:");
+
+        const char* objectLabels[] = { "Mesa", "Cocina", "Sartén", "Jarra", "Plato", "Hacha", "Esfera" };
+        constexpr int objectCount = 7;
+
+        if (!isObjectLoaded(m_selectedObjectIndex))
+        {
+            for (int i = 0; i < objectCount; ++i)
+            {
+                if (isObjectLoaded(i))
+                {
+                    m_selectedObjectIndex = i;
+                    break;
+                }
+            }
+        }
+
+        ImGui::BeginChild("##ObjectSelection", ImVec2(0.0f, 130.0f), true);
+        for (int i = 0; i < objectCount; ++i)
+        {
+            bool loaded = isObjectLoaded(i);
+            if (!loaded)
+            {
+                ImGui::BeginDisabled();
+            }
+
+            ImGui::RadioButton(objectLabels[i], &m_selectedObjectIndex, i);
+
+            if (!loaded)
+            {
+                ImGui::EndDisabled();
+            }
+        }
+        ImGui::EndChild();
+
+        MappingSelection* mappingSelection = getMappingSelection(m_selectedObjectIndex);
+        if (mappingSelection && isObjectLoaded(m_selectedObjectIndex))
+        {
+            const char* mappingGroups[] = { "Original", "S-Mapping", "O-Mapping" };
+            const char* sMappingOptions[] = { "Esferico", "Cilindrico" };
+            const char* oMappingOptions[] = { "Planar XY", "Planar XZ" };
+            bool mappingChanged = false;
+
+            if (ImGui::Combo("Tipo de mapeo", &mappingSelection->mappingGroup, mappingGroups, IM_ARRAYSIZE(mappingGroups)))
+            {
+                mappingChanged = true;
+            }
+
+            if (mappingSelection->mappingGroup == static_cast<int>(MappingGroup::SMapping))
+            {
+                if (ImGui::Combo("S-Mapping", &mappingSelection->sMappingMode, sMappingOptions, IM_ARRAYSIZE(sMappingOptions)))
+                {
+                    mappingChanged = true;
+                }
+            }
+            else if (mappingSelection->mappingGroup == static_cast<int>(MappingGroup::OMapping))
+            {
+                if (ImGui::Combo("O-Mapping", &mappingSelection->oMappingMode, oMappingOptions, IM_ARRAYSIZE(oMappingOptions)))
+                {
+                    mappingChanged = true;
+                }
+            }
+
+            if (mappingChanged)
+            {
+                applyMappingSelection(m_selectedObjectIndex);
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "Bump mapping (esfera):");
+        if (ImGui::Button("Cambiar textura difusa"))
+        {
+            const char* filters[] = { "*.png", "*.jpg", "*.jpeg", "*.bmp" };
+            const char* file = tinyfd_openFileDialog("Seleccionar textura difusa", "", 4, filters, "Texturas", 0);
+            if (file)
+            {
+                GLuint newTexture = loadTexture2D(file);
+                if (newTexture != 0)
+                {
+                    if (m_sphereDiffuseTexture)
+                        glDeleteTextures(1, &m_sphereDiffuseTexture);
+                    m_sphereDiffuseTexture = newTexture;
+                    
+                    glBindTexture(GL_TEXTURE_2D, m_sphereDiffuseTexture);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    m_sphereDiffusePath = file;
+                }
+            }
+        }
+        if (!m_sphereDiffusePath.empty())
+        {
+            ImGui::Text("Difusa: %s", m_sphereDiffusePath.c_str());
+        }
+
+        if (ImGui::Button("Quitar textura difusa"))
+        {
+            if (m_sphereDiffuseTexture)
+            {
+                glDeleteTextures(1, &m_sphereDiffuseTexture);
+                m_sphereDiffuseTexture = 0;
+            }
+            m_sphereDiffusePath.clear();
+        }
+
+        if (ImGui::Button("Cambiar textura bump"))
+        {
+            const char* filters[] = { "*.png", "*.jpg", "*.jpeg", "*.bmp" };
+            const char* file = tinyfd_openFileDialog("Seleccionar textura bump", "", 4, filters, "Texturas", 0);
+            if (file)
+            {
+                GLuint newTexture = loadTexture2D(file);
+                if (newTexture != 0)
+                {
+                    if (m_sphereNormalTexture)
+                        glDeleteTextures(1, &m_sphereNormalTexture);
+                    m_sphereNormalTexture = newTexture;
+                    glBindTexture(GL_TEXTURE_2D, m_sphereNormalTexture);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    m_sphereNormalPath = file;
+                }
+            }
+        }
+        if (!m_sphereNormalPath.empty())
+        {
+            ImGui::Text("Bump: %s", m_sphereNormalPath.c_str());
+        }
+
+        if (ImGui::Button("Quitar textura bump"))
+        {
+            if (m_sphereNormalTexture)
+            {
+                glDeleteTextures(1, &m_sphereNormalTexture);
+                m_sphereNormalTexture = 0;
+            }
+            m_sphereNormalPath.clear();
+        }
 
         ImGui::Separator();
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "Transformaciones del Objeto:");
@@ -1842,4 +2063,344 @@ void C3DViewer::renderSkybox()
     {
         glEnable(GL_CULL_FACE);
     }
+}
+
+bool C3DViewer::setupBumpSphere()
+{
+    if (m_sphereVAO != 0)
+        return true;
+
+    const float radius = 0.5f;
+    const unsigned int stacks = 32;
+    const unsigned int slices = 48;
+    m_sphereVertices.clear();
+    m_sphereIndices.clear();
+    m_sphereBaseTexCoords.clear();
+    m_sphereVertices.reserve((stacks + 1) * (slices + 1));
+
+    for (unsigned int stack = 0; stack <= stacks; ++stack)
+    {
+        float v = static_cast<float>(stack) / static_cast<float>(stacks);
+        float phi = glm::pi<float>() * v;
+        float y = std::cos(phi);
+        float ringRadius = std::sin(phi);
+        for (unsigned int slice = 0; slice <= slices; ++slice)
+        {
+            float u = static_cast<float>(slice) / static_cast<float>(slices);
+            float theta = glm::two_pi<float>() * u;
+            float x = ringRadius * std::cos(theta);
+            float z = ringRadius * std::sin(theta);
+
+            glm::vec3 normal = glm::normalize(glm::vec3(x, y, z));
+            glm::vec3 position = normal * radius;
+            glm::vec2 texCoord = glm::vec2(u, 1.0f - v);
+
+            glm::vec3 tangent = glm::normalize(glm::vec3(-std::sin(theta), 0.0f, std::cos(theta)));
+
+            m_sphereVertices.push_back({ position, normal, texCoord, tangent });
+            m_sphereBaseTexCoords.push_back(texCoord);
+        }
+    }
+
+    for (unsigned int stack = 0; stack < stacks; ++stack)
+    {
+        for (unsigned int slice = 0; slice < slices; ++slice)
+        {
+            unsigned int first = stack * (slices + 1) + slice;
+            unsigned int second = first + slices + 1;
+
+            m_sphereIndices.push_back(first);
+            m_sphereIndices.push_back(second);
+            m_sphereIndices.push_back(first + 1);
+
+            m_sphereIndices.push_back(second);
+            m_sphereIndices.push_back(second + 1);
+            m_sphereIndices.push_back(first + 1);
+        }
+    }
+
+    m_sphereIndexCount = static_cast<GLsizei>(m_sphereIndices.size());
+
+    glGenVertexArrays(1, &m_sphereVAO);
+    glGenBuffers(1, &m_sphereVBO);
+    glGenBuffers(1, &m_sphereEBO);
+
+    glBindVertexArray(m_sphereVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_sphereVBO);
+    glBufferData(GL_ARRAY_BUFFER, m_sphereVertices.size() * sizeof(SphereVertex), m_sphereVertices.data(), GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_sphereEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_sphereIndices.size() * sizeof(unsigned int), m_sphereIndices.data(), GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), (void*)offsetof(SphereVertex, position));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), (void*)offsetof(SphereVertex, normal));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), (void*)offsetof(SphereVertex, texCoord));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), (void*)offsetof(SphereVertex, tangent));
+    glEnableVertexAttribArray(3);
+
+    glBindVertexArray(0);
+
+    if (m_sphereDiffuseTexture == 0)
+    {
+        m_sphereDiffuseTexture = createSolidTexture(glm::vec3(1.0f));
+        // Prefer clamp at edges for spherical mappings to avoid seam blending
+        glBindTexture(GL_TEXTURE_2D, m_sphereDiffuseTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    if (m_sphereNormalTexture == 0)
+    {
+        // Try to load a default bump map file if available, otherwise fallback to solid normal.
+        const std::string defaultBumpPath = "src/objetos/bump/bump.jpg";
+        GLuint loadedNormal = loadTexture2D(defaultBumpPath);
+        if (loadedNormal != 0)
+        {
+            m_sphereNormalTexture = loadedNormal;
+            m_sphereNormalPath = defaultBumpPath;
+            glBindTexture(GL_TEXTURE_2D, m_sphereNormalTexture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+        else
+        {
+            m_sphereNormalTexture = createSolidTexture(glm::vec3(0.5f, 0.5f, 1.0f));
+            glBindTexture(GL_TEXTURE_2D, m_sphereNormalTexture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+    }
+
+    return m_sphereVAO != 0;
+}
+
+GLuint C3DViewer::createSolidTexture(const glm::vec3& color)
+{
+    unsigned char data[4] = {
+        static_cast<unsigned char>(glm::clamp(color.r, 0.0f, 1.0f) * 255.0f),
+        static_cast<unsigned char>(glm::clamp(color.g, 0.0f, 1.0f) * 255.0f),
+        static_cast<unsigned char>(glm::clamp(color.b, 0.0f, 1.0f) * 255.0f),
+        255
+    };
+
+    GLuint textureId = 0;
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_2D, textureId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    return textureId;
+}
+
+GLuint C3DViewer::loadTexture2D(const std::string& path)
+{
+    if (path.empty())
+        return 0;
+
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    stbi_set_flip_vertically_on_load(true);
+    
+    unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+    channels = 4; // we forced RGBA
+    if (!data)
+    {
+        std::cerr << "Warning: No se pudo cargar textura: " << path << " -> " << stbi_failure_reason() << std::endl;
+        return 0;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        stbi_image_free(data);
+        std::cerr << "Warning: textura con dimensiones invalidas: " << path << std::endl;
+        return 0;
+    }
+
+    // We requested RGBA data
+    GLenum format = GL_RGBA;
+
+    GLuint textureId = 0;
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_2D, textureId);
+
+    GLint previousUnpackAlignment = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousUnpackAlignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, previousUnpackAlignment);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    stbi_image_free(data);
+    return textureId;
+}
+
+void C3DViewer::applySphereMapping(const MappingSelection& selection)
+{
+    if (m_sphereVertices.empty() || m_sphereVBO == 0)
+        return;
+
+    glm::vec3 minBounds(std::numeric_limits<float>::max());
+    glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
+    for (const auto& vertex : m_sphereVertices)
+    {
+        minBounds = glm::min(minBounds, vertex.position);
+        maxBounds = glm::max(maxBounds, vertex.position);
+    }
+
+    glm::vec3 size = maxBounds - minBounds;
+    if (std::abs(size.x) < 1e-6f) size.x = 1.0f;
+    if (std::abs(size.y) < 1e-6f) size.y = 1.0f;
+    if (std::abs(size.z) < 1e-6f) size.z = 1.0f;
+
+    if (selection.mappingGroup == static_cast<int>(MappingGroup::Original))
+    {
+        for (size_t i = 0; i < m_sphereVertices.size(); ++i)
+        {
+            if (i < m_sphereBaseTexCoords.size())
+                m_sphereVertices[i].texCoord = m_sphereBaseTexCoords[i];
+        }
+    }
+    else
+    {
+        bool useSMapping = selection.mappingGroup == static_cast<int>(MappingGroup::SMapping);
+        for (auto& vertex : m_sphereVertices)
+        {
+            glm::vec2 uv(0.0f);
+            const glm::vec3& v = vertex.position;
+            if (useSMapping)
+            {
+                if (selection.sMappingMode == 0)
+                {
+                    glm::vec3 p = glm::normalize(v);
+                    float u = 0.5f + std::atan2(p.z, p.x) / (2.0f * glm::pi<float>());
+                    float vCoord = 0.5f - std::asin(glm::clamp(p.y, -1.0f, 1.0f)) / glm::pi<float>();
+                    uv = glm::vec2(u, vCoord);
+                }
+                else
+                {
+                    float u = 0.5f + std::atan2(v.z, v.x) / (2.0f * glm::pi<float>());
+                    float vCoord = (v.y - minBounds.y) / size.y;
+                    uv = glm::vec2(u, vCoord);
+                }
+            }
+            else
+            {
+                if (selection.oMappingMode == 0)
+                {
+                    float u = (v.x - minBounds.x) / size.x;
+                    float vCoord = (v.y - minBounds.y) / size.y;
+                    uv = glm::vec2(u, vCoord);
+                }
+                else
+                {
+                    float u = (v.x - minBounds.x) / size.x;
+                    float vCoord = (v.z - minBounds.z) / size.z;
+                    uv = glm::vec2(u, vCoord);
+                }
+            }
+
+            vertex.texCoord = glm::clamp(uv, glm::vec2(0.0f), glm::vec2(1.0f));
+        }
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_sphereVBO);
+    glBufferData(GL_ARRAY_BUFFER, m_sphereVertices.size() * sizeof(SphereVertex), m_sphereVertices.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+bool C3DViewer::isObjectLoaded(int index) const
+{
+    switch (index)
+    {
+    case 0: return m_objLoaded;
+    case 1: return m_stoveLoaded;
+    case 2: return m_howlLoaded;
+    case 3: return m_jugLoaded;
+    case 4: return m_plateLoaded;
+    case 5: return m_axeLoaded;
+    case 6: return m_sphereVAO != 0 && m_sphereIndexCount > 0;
+    default: return false;
+    }
+}
+
+C3DViewer::MappingSelection* C3DViewer::getMappingSelection(int index)
+{
+    switch (index)
+    {
+    case 0: return &m_tableMapping;
+    case 1: return &m_stoveMapping;
+    case 2: return &m_howlMapping;
+    case 3: return &m_jugMapping;
+    case 4: return &m_plateMapping;
+    case 5: return &m_axeMapping;
+    case 6: return &m_sphereMapping;
+    default: return nullptr;
+    }
+}
+
+OBJLoader* C3DViewer::getLoaderForIndex(int index)
+{
+    switch (index)
+    {
+    case 0: return &m_objLoader;
+    case 1: return &m_stoveLoader;
+    case 2: return &m_howlLoader;
+    case 3: return &m_jugLoader;
+    case 4: return &m_plateLoader;
+    case 5: return &m_axeLoader;
+    default: return nullptr;
+    }
+}
+
+void C3DViewer::applyMappingSelection(int index)
+{
+    if (!isObjectLoaded(index))
+        return;
+
+    MappingSelection* selection = getMappingSelection(index);
+    if (!selection)
+        return;
+
+    if (index == 6)
+    {
+        applySphereMapping(*selection);
+        return;
+    }
+
+    OBJLoader* loader = getLoaderForIndex(index);
+    if (!loader)
+        return;
+
+    OBJLoader::TexCoordMapping mapping = OBJLoader::TexCoordMapping::Original;
+    if (selection->mappingGroup == static_cast<int>(MappingGroup::SMapping))
+    {
+        mapping = (selection->sMappingMode == 0)
+            ? OBJLoader::TexCoordMapping::Spherical
+            : OBJLoader::TexCoordMapping::Cylindrical;
+    }
+    else if (selection->mappingGroup == static_cast<int>(MappingGroup::OMapping))
+    {
+        mapping = (selection->oMappingMode == 0)
+            ? OBJLoader::TexCoordMapping::PlanarXY
+            : OBJLoader::TexCoordMapping::PlanarXZ;
+    }
+
+    loader->applyTexCoordMapping(mapping);
 }

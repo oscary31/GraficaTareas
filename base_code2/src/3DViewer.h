@@ -135,6 +135,37 @@ protected:
     bool m_plateLoaded = false;
     bool m_axeLoaded = false;
 
+    enum class MappingGroup {
+        Original = 0,
+        SMapping = 1,
+        OMapping = 2
+    };
+
+    struct MappingSelection {
+        int mappingGroup = static_cast<int>(MappingGroup::Original);
+        int sMappingMode = 0;
+        int oMappingMode = 0;
+    };
+
+    int m_selectedObjectIndex = 0;
+    MappingSelection m_tableMapping;
+    MappingSelection m_stoveMapping;
+    MappingSelection m_howlMapping;
+    MappingSelection m_jugMapping;
+    MappingSelection m_plateMapping;
+    MappingSelection m_axeMapping;
+    MappingSelection m_sphereMapping;
+
+    bool isObjectLoaded(int index) const;
+    MappingSelection* getMappingSelection(int index);
+    OBJLoader* getLoaderForIndex(int index);
+    void applyMappingSelection(int index);
+
+    bool setupBumpSphere();
+    GLuint loadTexture2D(const std::string& path);
+    GLuint createSolidTexture(const glm::vec3& color);
+    void applySphereMapping(const MappingSelection& selection);
+
     // Camera
     glm::vec3 m_cameraPos = glm::vec3(0.0f, 0.0f, 0.0f);
     glm::vec3 m_cameraTarget = glm::vec3(0.0f, 0.0f, -3.0f);
@@ -189,6 +220,29 @@ protected:
     glm::vec3 m_axeScale = glm::vec3(0.09f);
     glm::quat m_axeRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 
+    struct SphereVertex
+    {
+        glm::vec3 position;
+        glm::vec3 normal;
+        glm::vec2 texCoord;
+        glm::vec3 tangent;
+    };
+
+    std::vector<SphereVertex> m_sphereVertices;
+    std::vector<unsigned int> m_sphereIndices;
+    std::vector<glm::vec2> m_sphereBaseTexCoords;
+    GLuint m_sphereVAO = 0;
+    GLuint m_sphereVBO = 0;
+    GLuint m_sphereEBO = 0;
+    GLsizei m_sphereIndexCount = 0;
+    glm::vec3 m_sphereTranslation = glm::vec3(0.0f);
+    glm::vec3 m_sphereScale = glm::vec3(0.1f);
+    glm::quat m_sphereRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    GLuint m_sphereDiffuseTexture = 0;
+    GLuint m_sphereNormalTexture = 0;
+    std::string m_sphereDiffusePath;
+    std::string m_sphereNormalPath;
+
     // Jug <-> glass pour animation (glass is a plate submesh)
     int m_plateGlassSubMeshIndex = -1;
     glm::vec3 m_plateGlassBaseTranslation = glm::vec3(0.0f);
@@ -226,6 +280,7 @@ protected:
         layout(location = 0) in vec3 aPos;
         layout(location = 1) in vec3 aNormal;
         layout(location = 2) in vec2 aTexCoord;
+        layout(location = 3) in vec3 aTangent;
         
         uniform mat4 model;
         uniform mat4 view;
@@ -234,12 +289,18 @@ protected:
         out vec3 FragPos;
         out vec3 Normal;
         out vec2 TexCoord;
+        out mat3 TBN;
         
         void main() 
         {
             FragPos = vec3(model * vec4(aPos, 1.0));
             Normal = mat3(transpose(inverse(model))) * aNormal;
             TexCoord = aTexCoord;
+            vec3 N = normalize(Normal);
+            vec3 T = normalize(mat3(model) * aTangent);
+            T = normalize(T - dot(T, N) * N);
+            vec3 B = normalize(cross(N, T));
+            TBN = mat3(T, B, N);
             gl_Position = projection * view * model * vec4(aPos, 1.0);
         }
     )glsl";
@@ -249,6 +310,7 @@ protected:
         in vec3 FragPos;
         in vec3 Normal;
         in vec2 TexCoord;
+        in mat3 TBN;
         
         out vec4 FragColor;
         
@@ -268,12 +330,14 @@ protected:
         uniform sampler2D texAmbient;
         uniform sampler2D texDiffuse;
         uniform sampler2D texSpecular;
+        uniform sampler2D texNormal;
         uniform samplerCube texEnvironment;
         uniform int hasAmbientMap;
         uniform int hasDiffuseMap;
         uniform int hasSpecularMap;
         uniform int useEnvironmentMap;
         uniform float environmentReflectivity;
+        uniform int useNormalMap;
         // Global scene light
         uniform int globalLightEnabled;
         uniform vec3 globalLightColor;
@@ -286,6 +350,12 @@ protected:
             vec3 specularColor = (hasSpecularMap == 1) ? texture(texSpecular, TexCoord).rgb : materialKs;
 
             vec3 norm = normalize(Normal);
+            if (useNormalMap == 1)
+            {
+                vec3 normalMap = texture(texNormal, TexCoord).rgb;
+                normalMap = normalMap * 2.0 - 1.0;
+                norm = normalize(TBN * normalMap);
+            }
             vec3 flatNormal = normalize(cross(dFdx(FragPos), dFdy(FragPos)));
             vec3 viewDir = normalize(viewPos - FragPos);
             vec3 result = vec3(0.0);
@@ -295,7 +365,7 @@ protected:
                 if (lightEnabled[i] == 0) continue;
 
                 vec3 lightDir = normalize(lightPos[i] - FragPos);
-                vec3 usedNormal = (lightShadingModel[i] == 2) ? flatNormal : norm;
+                vec3 usedNormal = (lightShadingModel[i] == 2 && useNormalMap == 0) ? flatNormal : norm;
                 float diff = max(dot(usedNormal, lightDir), 0.0);
 
                 float attenuation = 1.0;

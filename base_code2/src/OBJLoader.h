@@ -29,6 +29,7 @@ struct SubMesh {
     std::vector<glm::vec3> vertices;
     std::vector<glm::vec3> normals;
     std::vector<glm::vec2> texCoords;
+    std::vector<glm::vec2> originalTexCoords;
     std::vector<unsigned int> indices;
     std::string materialName;
     Material material;
@@ -66,6 +67,14 @@ public:
     void setupBuffers();
     void cleanupBuffers();
     void calculateVertexNormals();
+    enum class TexCoordMapping {
+        Original = 0,
+        Spherical = 1,
+        Cylindrical = 2,
+        PlanarXY = 3,
+        PlanarXZ = 4
+    };
+    void applyTexCoordMapping(TexCoordMapping mapping);
 
 private:
     bool loadMTL(const std::string& mtlPath);
