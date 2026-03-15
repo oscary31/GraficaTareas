@@ -31,12 +31,16 @@ C3DViewer::~C3DViewer()
     if (m_skyboxVAO) glDeleteVertexArrays(1, &m_skyboxVAO);
     if (m_skyboxVBO) glDeleteBuffers(1, &m_skyboxVBO);
     if (m_skyboxTexture) glDeleteTextures(1, &m_skyboxTexture);
+    if (m_plateReflectionMap) glDeleteTextures(1, &m_plateReflectionMap);
+    if (m_jugReflectionMap) glDeleteTextures(1, &m_jugReflectionMap);
+    if (m_axeReflectionMap) glDeleteTextures(1, &m_axeReflectionMap);
+    if (m_reflectionRBO) glDeleteRenderbuffers(1, &m_reflectionRBO);
+    if (m_reflectionFBO) glDeleteFramebuffers(1, &m_reflectionFBO);
     if (m_sphereVAO) glDeleteVertexArrays(1, &m_sphereVAO);
     if (m_sphereVBO) glDeleteBuffers(1, &m_sphereVBO);
     if (m_sphereEBO) glDeleteBuffers(1, &m_sphereEBO);
     if (m_sphereDiffuseTexture) glDeleteTextures(1, &m_sphereDiffuseTexture);
     if (m_sphereNormalTexture) glDeleteTextures(1, &m_sphereNormalTexture);
-    // Normal/vertex overlay resources removed
     if (m_window) glfwDestroyWindow(m_window);
     glfwTerminate();
 }
@@ -113,6 +117,10 @@ bool C3DViewer::setup()
     {
         std::cerr << "Warning: No se pudo cargar la skybox." << std::endl;
     }
+    if (!setupReflectionResources())
+    {
+        std::cerr << "Warning: No se pudieron inicializar los mapas de reflejo." << std::endl;
+    }
     loadOBJFile();
     if (!setupBumpSphere())
     {
@@ -153,17 +161,126 @@ bool C3DViewer::setup()
     return true;
 }
 
+bool C3DViewer::setupReflectionResources()
+{
+    if (m_reflectionFBO != 0)
+        return true;
+
+    glGenFramebuffers(1, &m_reflectionFBO);
+    glGenRenderbuffers(1, &m_reflectionRBO);
+
+    glBindRenderbuffer(GL_RENDERBUFFER, m_reflectionRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, ReflectionMapSize, ReflectionMapSize);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    auto createCubemap = [&](GLuint& textureId)
+    {
+        glGenTextures(1, &textureId);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, textureId);
+        for (unsigned int i = 0; i < 6; ++i)
+        {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB,
+                ReflectionMapSize, ReflectionMapSize, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+        }
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    };
+
+    createCubemap(m_plateReflectionMap);
+    createCubemap(m_jugReflectionMap);
+    createCubemap(m_axeReflectionMap);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, m_reflectionFBO);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_reflectionRBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    return m_reflectionFBO != 0 && m_reflectionRBO != 0 && m_plateReflectionMap != 0 && m_jugReflectionMap != 0 && m_axeReflectionMap != 0;
+}
+
+void C3DViewer::updateReflectionCubemaps()
+{
+    if (m_reflectionFBO == 0)
+        return;
+
+    if (m_plateLoaded && m_plateReflectionMap != 0)
+    {
+        updateReflectionCubemap(m_plateReflectionMap, m_plateTranslation, -1);
+    }
+    if (m_jugLoaded && m_jugReflectionMap != 0)
+    {
+        updateReflectionCubemap(m_jugReflectionMap, m_jugTranslation, 3);
+    }
+    if (m_axeLoaded && m_axeReflectionMap != 0)
+    {
+        updateReflectionCubemap(m_axeReflectionMap, m_axeTranslation, 5);
+    }
+}
+
+void C3DViewer::updateReflectionCubemap(GLuint cubemapTexture, const glm::vec3& position, int skipObjectIndex)
+{
+    if (m_reflectionFBO == 0 || cubemapTexture == 0)
+        return;
+
+    GLint prevViewport[4];
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+    glm::mat4 prevView = m_viewMatrix;
+    glm::mat4 prevProj = m_projectionMatrix;
+    glm::vec3 prevCameraPos = m_cameraPos;
+
+    m_projectionMatrix = glm::perspective(glm::radians(90.0f), 1.0f, 0.01f, 100.0f);
+    m_cameraPos = position;
+
+    std::array<glm::mat4, 6> captureViews = {
+        glm::lookAt(position, position + glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f)),
+        glm::lookAt(position, position + glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f)),
+        glm::lookAt(position, position + glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
+        glm::lookAt(position, position + glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f)),
+        glm::lookAt(position, position + glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f)),
+        glm::lookAt(position, position + glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f))
+    };
+
+    glBindFramebuffer(GL_FRAMEBUFFER, m_reflectionFBO);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_reflectionRBO);
+
+    for (unsigned int face = 0; face < 6; ++face)
+    {
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemapTexture, 0);
+        if (face == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        {
+            break;
+        }
+
+        m_viewMatrix = captureViews[face];
+        glViewport(0, 0, ReflectionMapSize, ReflectionMapSize);
+        glClearColor(m_backgroundColor.r, m_backgroundColor.g, m_backgroundColor.b, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        renderSkybox();
+        renderSceneObjects(false, skipObjectIndex, 0, 0, 0);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    m_viewMatrix = prevView;
+    m_projectionMatrix = prevProj;
+    m_cameraPos = prevCameraPos;
+}
+
 void C3DViewer::renderLoadingScreen(const std::string& message)
 {
     if (!m_window)
         return;
 
-    // Start a new ImGui frame and draw a centered message
+    // Inicia un nuevo frame ImGui y crea un mensaje centrado
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // Fullscreen opaque window
+    
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImVec2((float)width, (float)height));
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
@@ -179,7 +296,7 @@ void C3DViewer::renderLoadingScreen(const std::string& message)
 
     ImGui::Render();
 
-    // Clear and render
+    // Limpiar y renderizar
     glClearColor(m_backgroundColor.x, m_backgroundColor.y, m_backgroundColor.z, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -559,7 +676,7 @@ void C3DViewer::updateScenePropsPlacement()
         }
     }
 
-    // Position plate on the table (near the stove/anchor)
+    // Posicionar el plato sobre la mesa 
     if (m_plateLoaded)
     {
         m_plateScale = glm::vec3(0.15f);
@@ -572,7 +689,7 @@ void C3DViewer::updateScenePropsPlacement()
         m_plateTranslation = platePos;
         m_plateRotation = glm::quat(glm::vec3(0.0f, glm::radians(0.0f), 0.0f));
 
-        // Find glass submesh in plate object once and cache its base translation
+        // Buscar el submesh del vaso en el objeto plato y guardar su traslación base
         if (m_plateGlassSubMeshIndex < 0)
         {
             const auto& subMeshes = m_plateLoader.getSubMeshes();
@@ -590,7 +707,7 @@ void C3DViewer::updateScenePropsPlacement()
             }
         }
 
-        // Find knife and fork submeshes for eating animation
+        // Buscar los submeshes de cuchillo y tenedor para la animación
         if (m_plateKnifeSubMeshIndex < 0 || m_plateForkSubMeshIndex < 0)
         {
             const auto& subMeshes = m_plateLoader.getSubMeshes();
@@ -598,11 +715,11 @@ void C3DViewer::updateScenePropsPlacement()
             for (size_t i = 0; i < subMeshes.size(); ++i)
             {
                 const auto& sm = subMeshes[i];
-                const std::string& n1 = sm.materialName;
-                const std::string& n2 = sm.material.name;
+                const std::string& materialName = sm.materialName;
+                const std::string& fallbackMaterialName = sm.material.name;
 
                 if (m_plateKnifeSubMeshIndex < 0 &&
-                    (n1.find("table_knife") != std::string::npos || n2.find("table_knife") != std::string::npos))
+                    (materialName.find("table_knife") != std::string::npos || fallbackMaterialName.find("table_knife") != std::string::npos))
                 {
                     m_plateKnifeSubMeshIndex = static_cast<int>(i);
                     m_plateKnifeBaseTranslation = editable[i].translation;
@@ -610,7 +727,7 @@ void C3DViewer::updateScenePropsPlacement()
                 }
 
                 if (m_plateForkSubMeshIndex < 0 &&
-                    (n1.find("fork") != std::string::npos || n2.find("fork") != std::string::npos))
+                    (materialName.find("fork") != std::string::npos || fallbackMaterialName.find("fork") != std::string::npos))
                 {
                     m_plateForkSubMeshIndex = static_cast<int>(i);
                     m_plateForkBaseTranslation = editable[i].translation;
@@ -618,7 +735,7 @@ void C3DViewer::updateScenePropsPlacement()
                 }
             }
 
-            // Fallback: infer knife/fork as the two submeshes farthest from plate center in XZ.
+            
             if ((m_plateKnifeSubMeshIndex < 0 || m_plateForkSubMeshIndex < 0) && !subMeshes.empty())
             {
                 std::vector<std::pair<float, int>> ranked;
@@ -663,7 +780,7 @@ void C3DViewer::updateScenePropsPlacement()
         }
     }
 
-    // Position axe on the table (to the side, slightly tilted)
+    // Posicionar el hacha sobre la mesa con ligera inclinación
     if (m_axeLoaded)
     {
         m_axeScale = glm::vec3(0.4f, 0.3f,0.24f);
@@ -811,7 +928,7 @@ void C3DViewer::updatePlateCutleryAnimation(double deltaTime)
 
         auto& sm = plateSubMeshes[index];
         float liftHeight = 0.02f;
-        // compute submesh local average (normalized) to map plate center into submesh-local translation
+        
         glm::vec3 normalizedAvg(0.0f);
         if (!sm.vertices.empty())
         {
@@ -822,10 +939,10 @@ void C3DViewer::updatePlateCutleryAnimation(double deltaTime)
             normalizedAvg = (avg - m_plateLoader.getCenter()) * m_plateLoader.getScaleFactor() * m_plateScale;
         }
 
-        // localBase is the user-editable base translation (in submesh-local space)
+
         glm::vec3 localBase = baseTranslation;
 
-        // desired target in submesh-local coords to place piece above plate center plus lateral offset
+        
         glm::vec3 desiredWorldOffsetAbovePlate(0.0f, localBase.y + liftHeight, 0.0f);
         glm::vec3 localTarget = desiredWorldOffsetAbovePlate - normalizedAvg + targetOffset;
 
@@ -876,16 +993,19 @@ void C3DViewer::renderOBJ()
     // Renderiza la escena 3D: relleno principal iluminado
     if (!m_objLoaded) return;
 
+    GLuint plateEnv = m_plateReflectionMap != 0 ? m_plateReflectionMap : m_skyboxTexture;
+    GLuint jugEnv = m_jugReflectionMap != 0 ? m_jugReflectionMap : m_skyboxTexture;
+    GLuint axeEnv = m_axeReflectionMap != 0 ? m_axeReflectionMap : m_skyboxTexture;
+    renderSceneObjects(true, -1, plateEnv, jugEnv, axeEnv);
+}
+
+void C3DViewer::renderSceneObjects(bool enableEnvironmentMap, int skipObjectIndex, GLuint plateEnvMap, GLuint jugEnvMap, GLuint axeEnvMap)
+{
+    if (!m_objLoaded)
+        return;
+
     glUseProgram(m_shaderProgram);
     uploadLightUniforms();
-
-    glm::mat4 normalizationMatrix = glm::mat4(1.0f);
-    normalizationMatrix = glm::scale(normalizationMatrix, m_objLoader.getScaleFactor() * m_objectScale);
-    normalizationMatrix = glm::translate(normalizationMatrix, -m_objLoader.getCenter());
-
-    glm::mat4 rotationMatrix = glm::mat4_cast(m_objectRotation);
-    glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), m_objectTranslation);
-    glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
 
     GLint viewLoc = glGetUniformLocation(m_shaderProgram, "view");
     GLint projLoc = glGetUniformLocation(m_shaderProgram, "projection");
@@ -910,174 +1030,182 @@ void C3DViewer::renderOBJ()
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texEnvironment"), 3);
     glUniform1i(glGetUniformLocation(m_shaderProgram, "texNormal"), 4);
 
-    
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(m_fillPolygonOffsetFactor, m_fillPolygonOffsetUnits);
+
+    glUniform1i(useNormalMapLoc, 0);
+
+    auto renderLoader = [&](const OBJLoader& loader, const glm::vec3& translation, const glm::vec3& scale, const glm::quat& rotation, int objectIndex)
     {
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(m_fillPolygonOffsetFactor, m_fillPolygonOffsetUnits);
+        if (skipObjectIndex == objectIndex)
+            return;
 
-        glUniform1i(useNormalMapLoc, 0);
+        uploadLightUniforms();
+        bool isPlateObject = (&loader == &m_plateLoader);
+        bool isJugObject = (&loader == &m_jugLoader);
+        bool isAxeObject = (&loader == &m_axeLoader);
 
-        auto renderLoader = [&](const OBJLoader& loader, const glm::vec3& translation, const glm::vec3& scale, const glm::quat& rotation)
+        glm::mat4 normalizationMatrix = glm::mat4(1.0f);
+        normalizationMatrix = glm::scale(normalizationMatrix, loader.getScaleFactor() * scale);
+        normalizationMatrix = glm::translate(normalizationMatrix, -loader.getCenter());
+
+        glm::mat4 rotationMatrix = glm::mat4_cast(rotation);
+        glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), translation);
+        glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
+
+        for (size_t i = 0; i < loader.getSubMeshes().size(); ++i)
         {
-            uploadLightUniforms();
-            bool isPlateObject = (&loader == &m_plateLoader);
-            bool isJugObject = (&loader == &m_jugLoader);
-            bool isAxeObject = (&loader == &m_axeLoader);
+            const auto& subMesh = loader.getSubMeshes()[i];
 
-            glm::mat4 normalizationMatrix = glm::mat4(1.0f);
-            normalizationMatrix = glm::scale(normalizationMatrix, loader.getScaleFactor() * scale);
-            normalizationMatrix = glm::translate(normalizationMatrix, -loader.getCenter());
+            glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
+            glm::mat4 subMeshRotation = glm::mat4_cast(subMesh.rotation);
+            m_modelMatrix = subMeshTransform * subMeshRotation * baseModel;
 
-            glm::mat4 rotationMatrix = glm::mat4_cast(rotation);
-            glm::mat4 objectTransform = glm::translate(glm::mat4(1.0f), translation);
-            glm::mat4 baseModel = objectTransform * rotationMatrix * normalizationMatrix;
-
-            for (size_t i = 0; i < loader.getSubMeshes().size(); ++i)
-            {
-                const auto& subMesh = loader.getSubMeshes()[i];
-
-                glm::mat4 subMeshTransform = glm::translate(glm::mat4(1.0f), subMesh.translation);
-                glm::mat4 subMeshRotation = glm::mat4_cast(subMesh.rotation);
-                m_modelMatrix = subMeshTransform * subMeshRotation * baseModel;
-
-                glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
-
-                const Material& material = subMesh.material;
-                glUniform3fv(materialKaLoc, 1, glm::value_ptr(material.Ka));
-                glUniform3fv(materialKdLoc, 1, glm::value_ptr(material.Kd));
-                glUniform3fv(materialKsLoc, 1, glm::value_ptr(material.Ks));
-
-                bool hasAmbient = material.ambientTexture != 0;
-                bool hasDiffuse = material.diffuseTexture != 0;
-                bool hasSpecular = material.specularTexture != 0;
-
-                bool isAxeHeadMaterial = false;
-                if (isAxeObject)
-                {
-                    const std::string& matName = subMesh.materialName.empty() ? material.name : subMesh.materialName;
-                    isAxeHeadMaterial = (matName == "Material.002");
-                }
-
-                bool useEnvMap = (m_skyboxTexture != 0) && (isPlateObject || isJugObject || isAxeHeadMaterial);
-                float envReflectivity = 0.0f;
-                if (isAxeHeadMaterial)
-                    envReflectivity = 0.9f;
-                else if (isJugObject)
-                    envReflectivity = 0.52f;
-                else if (isPlateObject)
-                    envReflectivity = 0.28f;
-
-                glUniform1i(hasAmbientMapLoc, hasAmbient ? 1 : 0);
-                glUniform1i(hasDiffuseMapLoc, hasDiffuse ? 1 : 0);
-                glUniform1i(hasSpecularMapLoc, hasSpecular ? 1 : 0);
-                glUniform1i(useEnvironmentMapLoc, useEnvMap ? 1 : 0);
-                glUniform1f(environmentReflectivityLoc, envReflectivity);
-
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, hasAmbient ? material.ambientTexture : 0);
-                glActiveTexture(GL_TEXTURE1);
-                glBindTexture(GL_TEXTURE_2D, hasDiffuse ? material.diffuseTexture : 0);
-                glActiveTexture(GL_TEXTURE2);
-                glBindTexture(GL_TEXTURE_2D, hasSpecular ? material.specularTexture : 0);
-                glActiveTexture(GL_TEXTURE3);
-                glBindTexture(GL_TEXTURE_CUBE_MAP, useEnvMap ? m_skyboxTexture : 0);
-
-                glBindVertexArray(subMesh.VAO);
-                glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
-                glBindVertexArray(0);
-            }
-        };
-
-        renderLoader(m_objLoader, m_objectTranslation, m_objectScale, m_objectRotation);
-
-        if (m_stoveLoaded)
-        {
-            renderLoader(m_stoveLoader, m_stoveTranslation, m_stoveScale, m_stoveRotation);
-        }
-
-        if (m_howlLoaded)
-        {
-            renderLoader(m_howlLoader, m_howlTranslation, m_howlScale, m_howlRotation);
-        }
-        if (m_jugLoaded)
-        {
-            renderLoader(m_jugLoader, m_jugTranslation, m_jugScale, m_jugRotation);
-        }
-        if (m_plateLoaded)
-        {
-            renderLoader(m_plateLoader, m_plateTranslation, m_plateScale, m_plateRotation);
-        }
-
-        if (m_axeLoaded)
-        {
-            renderLoader(m_axeLoader, m_axeTranslation, m_axeScale, m_axeRotation);
-        }
-
-        if (m_sphereVAO != 0 && m_sphereIndexCount > 0)
-        {
-            uploadLightUniforms();
-            // Temporarily reduce attenuation for the sphere so we can see diffuse contribution
-            GLint attenLoc = glGetUniformLocation(m_shaderProgram, "lightUseAttenuation");
-            if (attenLoc >= 0)
-            {
-                int noAtten[MAX_LIGHTS] = { 0 };
-                glUniform1iv(attenLoc, MAX_LIGHTS, noAtten);
-            }
-            glm::mat4 sphereTransform = glm::translate(glm::mat4(1.0f), m_sphereTranslation)
-                * glm::mat4_cast(m_sphereRotation)
-                * glm::scale(glm::mat4(1.0f), m_sphereScale);
-
-            m_modelMatrix = sphereTransform;
             glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
 
-            glm::vec3 sphereKa(0.3f);
-            glm::vec3 sphereKd(1.0f);
-            glm::vec3 sphereKs(0.9f);
-            glUniform3fv(materialKaLoc, 1, glm::value_ptr(sphereKa));
-            glUniform3fv(materialKdLoc, 1, glm::value_ptr(sphereKd));
-            glUniform3fv(materialKsLoc, 1, glm::value_ptr(sphereKs));
+            const Material& material = subMesh.material;
+            glUniform3fv(materialKaLoc, 1, glm::value_ptr(material.Ka));
+            glUniform3fv(materialKdLoc, 1, glm::value_ptr(material.Kd));
+            glUniform3fv(materialKsLoc, 1, glm::value_ptr(material.Ks));
 
-            bool hasSphereDiffuse = m_sphereDiffuseTexture != 0;
-            glUniform1i(hasAmbientMapLoc, 0);
-            glUniform1i(hasDiffuseMapLoc, hasSphereDiffuse ? 1 : 0);
-            glUniform1i(hasSpecularMapLoc, 0);
-            glUniform1i(useEnvironmentMapLoc, 0);
-            glUniform1f(environmentReflectivityLoc, 0.0f);
-            glUniform1i(useNormalMapLoc, m_sphereNormalTexture != 0 ? 1 : 0);
+            bool hasAmbient = material.ambientTexture != 0;
+            bool hasDiffuse = material.diffuseTexture != 0;
+            bool hasSpecular = material.specularTexture != 0;
+
+            bool isAxeHeadMaterial = false;
+            if (isAxeObject)
+            {
+                const std::string& matName = subMesh.materialName.empty() ? material.name : subMesh.materialName;
+                isAxeHeadMaterial = (matName == "Material.002");
+            }
+
+            GLuint envTexture = 0;
+            if (enableEnvironmentMap)
+            {
+                if (isPlateObject)
+                    envTexture = plateEnvMap;
+                else if (isJugObject)
+                    envTexture = jugEnvMap;
+                else if (isAxeHeadMaterial)
+                    envTexture = axeEnvMap;
+            }
+
+            bool useEnvMap = enableEnvironmentMap && envTexture != 0 && (isPlateObject || isJugObject || isAxeHeadMaterial);
+            float envReflectivity = 0.0f;
+            if (isAxeHeadMaterial)
+                envReflectivity = 0.9f;
+            else if (isJugObject)
+                envReflectivity = 0.52f;
+            else if (isPlateObject)
+                envReflectivity = 0.28f;
+
+            glUniform1i(hasAmbientMapLoc, hasAmbient ? 1 : 0);
+            glUniform1i(hasDiffuseMapLoc, hasDiffuse ? 1 : 0);
+            glUniform1i(hasSpecularMapLoc, hasSpecular ? 1 : 0);
+            glUniform1i(useEnvironmentMapLoc, useEnvMap ? 1 : 0);
+            glUniform1f(environmentReflectivityLoc, envReflectivity);
 
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, 0);
+            glBindTexture(GL_TEXTURE_2D, hasAmbient ? material.ambientTexture : 0);
             glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, hasSphereDiffuse ? m_sphereDiffuseTexture : 0);
+            glBindTexture(GL_TEXTURE_2D, hasDiffuse ? material.diffuseTexture : 0);
             glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, 0);
+            glBindTexture(GL_TEXTURE_2D, hasSpecular ? material.specularTexture : 0);
             glActiveTexture(GL_TEXTURE3);
-            glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-            glActiveTexture(GL_TEXTURE4);
-            glBindTexture(GL_TEXTURE_2D, m_sphereNormalTexture != 0 ? m_sphereNormalTexture : 0);
+            glBindTexture(GL_TEXTURE_CUBE_MAP, useEnvMap ? envTexture : 0);
 
-            glBindVertexArray(m_sphereVAO);
-            glDrawElements(GL_TRIANGLES, m_sphereIndexCount, GL_UNSIGNED_INT, 0);
+            glBindVertexArray(subMesh.VAO);
+            glDrawElements(GL_TRIANGLES, subMesh.indices.size(), GL_UNSIGNED_INT, 0);
             glBindVertexArray(0);
-            glUniform1i(useNormalMapLoc, 0);
         }
+    };
+
+    renderLoader(m_objLoader, m_objectTranslation, m_objectScale, m_objectRotation, 0);
+
+    if (m_stoveLoaded)
+    {
+        renderLoader(m_stoveLoader, m_stoveTranslation, m_stoveScale, m_stoveRotation, 1);
+    }
+
+    if (m_howlLoaded)
+    {
+        renderLoader(m_howlLoader, m_howlTranslation, m_howlScale, m_howlRotation, 2);
+    }
+    if (m_jugLoaded)
+    {
+        renderLoader(m_jugLoader, m_jugTranslation, m_jugScale, m_jugRotation, 3);
+    }
+    if (m_plateLoaded)
+    {
+        renderLoader(m_plateLoader, m_plateTranslation, m_plateScale, m_plateRotation, 4);
+    }
+
+    if (m_axeLoaded)
+    {
+        renderLoader(m_axeLoader, m_axeTranslation, m_axeScale, m_axeRotation, 5);
+    }
+
+    if (m_sphereVAO != 0 && m_sphereIndexCount > 0 && skipObjectIndex != 6)
+    {
+        uploadLightUniforms();
+        GLint attenLoc = glGetUniformLocation(m_shaderProgram, "lightUseAttenuation");
+        if (attenLoc >= 0)
+        {
+            int noAtten[MAX_LIGHTS] = { 0 };
+            glUniform1iv(attenLoc, MAX_LIGHTS, noAtten);
+        }
+        glm::mat4 sphereTransform = glm::translate(glm::mat4(1.0f), m_sphereTranslation)
+            * glm::mat4_cast(m_sphereRotation)
+            * glm::scale(glm::mat4(1.0f), m_sphereScale);
+
+        m_modelMatrix = sphereTransform;
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(m_modelMatrix));
+
+        glm::vec3 sphereKa(0.3f);
+        glm::vec3 sphereKd(1.0f);
+        glm::vec3 sphereKs(0.9f);
+        glUniform3fv(materialKaLoc, 1, glm::value_ptr(sphereKa));
+        glUniform3fv(materialKdLoc, 1, glm::value_ptr(sphereKd));
+        glUniform3fv(materialKsLoc, 1, glm::value_ptr(sphereKs));
+
+        bool hasSphereDiffuse = m_sphereDiffuseTexture != 0;
+        glUniform1i(hasAmbientMapLoc, 0);
+        glUniform1i(hasDiffuseMapLoc, hasSphereDiffuse ? 1 : 0);
+        glUniform1i(hasSpecularMapLoc, 0);
+        glUniform1i(useEnvironmentMapLoc, 0);
+        glUniform1f(environmentReflectivityLoc, 0.0f);
+        glUniform1i(useNormalMapLoc, m_sphereNormalTexture != 0 ? 1 : 0);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindTexture(GL_TEXTURE_2D, hasSphereDiffuse ? m_sphereDiffuseTexture : 0);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
         glActiveTexture(GL_TEXTURE4);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindTexture(GL_TEXTURE_2D, m_sphereNormalTexture != 0 ? m_sphereNormalTexture : 0);
 
-        glDisable(GL_POLYGON_OFFSET_FILL);
+        glBindVertexArray(m_sphereVAO);
+        glDrawElements(GL_TRIANGLES, m_sphereIndexCount, GL_UNSIGNED_INT, 0);
+        glBindVertexArray(0);
+        glUniform1i(useNormalMapLoc, 0);
     }
 
-    // Normal and vertex overlays removed
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glDisable(GL_POLYGON_OFFSET_FILL);
 }
 
 void C3DViewer::computeCameraVectors()
@@ -1106,6 +1234,8 @@ void C3DViewer::updateViewMatrix()
 void C3DViewer::render()
 {
     update();
+
+    updateReflectionCubemaps();
 
     renderSkybox();
 
@@ -1216,13 +1346,12 @@ void C3DViewer::drawInterface()
             }
         }
 
-        // (Opciones de relleno/alambrado removidas)
 
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0, 1, 0, 1), "Luces:");
         ImGui::SliderFloat("Velocidad animacion", &m_lightAnimationSpeed, 0.0f, 3.0f, "%.2fx");
 
-        // Global white light controls
+        // Controles de la luz global blanca
         ImGui::Separator();
         ImGui::TextColored(ImVec4(1, 1, 1, 1), "Luz global:");
         if (ImGui::Checkbox("Activa luz global", &m_globalLightEnabled)) {}
@@ -1267,12 +1396,12 @@ void C3DViewer::drawInterface()
             }
         }
 
-        // Geometry overlay options removed (normals/vertices)
+
 
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "Mapeo de texturas:");
 
-        const char* objectLabels[] = { "Mesa", "Cocina", "Sartén", "Jarra", "Plato", "Hacha", "Esfera" };
+        const char* objectLabels[] = { "Mesa", "Cocina", "Sarten", "Jarra", "Plato", "Hacha", "Esfera" };
         constexpr int objectCount = 7;
 
         if (!isObjectLoaded(m_selectedObjectIndex))
@@ -1415,35 +1544,7 @@ void C3DViewer::drawInterface()
         ImGui::Separator();
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "Transformaciones del Objeto:");
 
-        // Controls for scene props: plate and axe
-        if (m_plateLoaded)
-        {
-            ImGui::Separator();
-            ImGui::Text("Plate (obj)");
-            ImGui::DragFloat3("Plate Pos", &m_plateTranslation.x, 0.01f, -10.0f, 10.0f);
-            ImGui::DragFloat3("Plate Scale", &m_plateScale.x, 0.005f, 0.001f, 10.0f);
-            // rotation in degrees for easier editing
-            glm::vec3 plateEulerDeg = glm::degrees(glm::eulerAngles(m_plateRotation));
-            float plateRotArr[3] = { plateEulerDeg.x, plateEulerDeg.y, plateEulerDeg.z };
-            if (ImGui::DragFloat3("Plate Rot (deg)", plateRotArr, 1.0f, -360.0f, 360.0f))
-            {
-                m_plateRotation = glm::quat(glm::radians(glm::vec3(plateRotArr[0], plateRotArr[1], plateRotArr[2])));
-            }
-        }
-
-        if (m_axeLoaded)
-        {
-            ImGui::Separator();
-            ImGui::Text("Axe (obj)");
-            ImGui::DragFloat3("Axe Pos", &m_axeTranslation.x, 0.01f, -10.0f, 10.0f);
-            ImGui::DragFloat3("Axe Scale", &m_axeScale.x, 0.005f, 0.001f, 10.0f);
-            glm::vec3 axeEulerDeg = glm::degrees(glm::eulerAngles(m_axeRotation));
-            float axeRotArr[3] = { axeEulerDeg.x, axeEulerDeg.y, axeEulerDeg.z };
-            if (ImGui::DragFloat3("Axe Rot (deg)", axeRotArr, 1.0f, -360.0f, 360.0f))
-            {
-                m_axeRotation = glm::quat(glm::radians(glm::vec3(axeRotArr[0], axeRotArr[1], axeRotArr[2])));
-            }
-        }
+        
 
     }
 
@@ -1451,18 +1552,18 @@ void C3DViewer::drawInterface()
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
-void C3DViewer::resize(int new_width, int new_height)
+void C3DViewer::resize(int newWidth, int newHeight)
 {
     // Evitar division por cero
-    if (new_width <= 0 || new_height <= 0)
+    if (newWidth <= 0 || newHeight <= 0)
     {
         std::cerr << "Advertencia: Dimensiones invalidas ("
-            << new_width << "x" << new_height << "), ignorando resize" << std::endl;
+            << newWidth << "x" << newHeight << "), ignorando resize" << std::endl;
         return;
     }
     // Establecer dimensiones minimas
-    width = std::max(1, new_width);
-    height = std::max(1, new_height);
+    width = std::max(1, newWidth);
+    height = std::max(1, newHeight);
 
     glViewport(0, 0, width, height);
     m_projectionMatrix = glm::perspective(glm::radians(45.0f),
@@ -1544,7 +1645,7 @@ void C3DViewer::cursorPosCallbackStatic(GLFWwindow* window, double xpos, double 
         self->onCursorPos(xpos, ypos);
 }
 
-// Bounding box functionality removed.
+
 
 void C3DViewer::initLights()
 {
@@ -1635,10 +1736,10 @@ void C3DViewer::uploadLightUniforms()
     glUniform1iv(glGetUniformLocation(m_shaderProgram, "lightShadingModel"), MAX_LIGHTS, shadingModels);
     glUniform1iv(glGetUniformLocation(m_shaderProgram, "lightUseAttenuation"), MAX_LIGHTS, attenuationFlags);
 
-    // Upload global light uniforms
+    // Subir variables uniformes de la luz global
     glUniform1i(glGetUniformLocation(m_shaderProgram, "globalLightEnabled"), m_globalLightEnabled ? 1 : 0);
     glUniform3fv(glGetUniformLocation(m_shaderProgram, "globalLightColor"), 1, glm::value_ptr(m_globalLightColor));
-    // Use camera position as global light position so ambient follows the camera
+    // Usar la posición de la cámara como posición de la luz global para que el ambiente siga a la cámara
     glUniform3fv(glGetUniformLocation(m_shaderProgram, "globalLightPos"), 1, glm::value_ptr(m_cameraPos));
     glUniform1f(glGetUniformLocation(m_shaderProgram, "globalLightIntensity"), m_globalLightIntensity);
 }
@@ -2146,7 +2247,7 @@ bool C3DViewer::setupBumpSphere()
     if (m_sphereDiffuseTexture == 0)
     {
         m_sphereDiffuseTexture = createSolidTexture(glm::vec3(1.0f));
-        // Prefer clamp at edges for spherical mappings to avoid seam blending
+
         glBindTexture(GL_TEXTURE_2D, m_sphereDiffuseTexture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -2154,7 +2255,7 @@ bool C3DViewer::setupBumpSphere()
     }
     if (m_sphereNormalTexture == 0)
     {
-        // Try to load a default bump map file if available, otherwise fallback to solid normal.
+        // Intentar cargar un bump map por defecto 
         const std::string defaultBumpPath = "src/objetos/bump/bump.jpg";
         GLuint loadedNormal = loadTexture2D(defaultBumpPath);
         if (loadedNormal != 0)
@@ -2212,7 +2313,7 @@ GLuint C3DViewer::loadTexture2D(const std::string& path)
     stbi_set_flip_vertically_on_load(true);
     
     unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
-    channels = 4; // we forced RGBA
+
     if (!data)
     {
         std::cerr << "Warning: No se pudo cargar textura: " << path << " -> " << stbi_failure_reason() << std::endl;
@@ -2226,7 +2327,7 @@ GLuint C3DViewer::loadTexture2D(const std::string& path)
         return 0;
     }
 
-    // We requested RGBA data
+
     GLenum format = GL_RGBA;
 
     GLuint textureId = 0;

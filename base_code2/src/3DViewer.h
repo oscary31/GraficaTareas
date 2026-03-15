@@ -32,7 +32,7 @@ private:
     virtual void render();
     virtual void drawInterface();
     glm::vec3 getCameraMovementDirection() const;
-    void resize(int new_width, int new_height);
+    void resize(int newWidth, int newHeight);
     bool setupShader();
     bool checkCompileErrors(GLuint shader, const char* type);
     void loadOBJFile();
@@ -42,10 +42,6 @@ private:
     void updateScenePropsPlacement();
     glm::vec3 getNormalizedMinBounds(const OBJLoader& loader, const glm::vec3& scale) const;
     glm::vec3 getNormalizedMaxBounds(const OBJLoader& loader, const glm::vec3& scale) const;
-
-    
-
-    // (Normal and vertex overlay visualization removed)
 
     struct LightSettings
     {
@@ -69,11 +65,9 @@ private:
     double m_lastLightUpdateTime = 0.0;
     float m_lightGlobalAngle = 0.0f;
 
-    // Global white light above scene
     bool m_globalLightEnabled = true;
     float m_globalLightIntensity = 1.0f;
     glm::vec3 m_globalLightColor = glm::vec3(1.0f);
-    glm::vec3 m_globalLightPosition = glm::vec3(0.0f, 3.0f, 0.0f);
 
     bool setupLightVisualization();
     bool setupLightSphereMesh();
@@ -85,6 +79,10 @@ private:
     void updatePlateCutleryAnimation(double deltaTime);
     void uploadLightUniforms();
     void renderLightIndicators();
+    bool setupReflectionResources();
+    void updateReflectionCubemaps();
+    void updateReflectionCubemap(GLuint cubemapTexture, const glm::vec3& position, int skipObjectIndex);
+    void renderSceneObjects(bool enableEnvironmentMap, int skipObjectIndex, GLuint plateEnvMap, GLuint jugEnvMap, GLuint axeEnvMap);
 
     bool setupSkybox();
     GLuint loadSkyboxCubemap(const std::array<std::string, 6>& faces);
@@ -106,7 +104,6 @@ protected:
     int height = 720;
     GLFWwindow* m_window = nullptr;
     GLuint m_shaderProgram = 0;
-    double lastTime = 0.0;
     bool mouseButtonsDown[3] = { false, false, false };
 
     // Mostrar FPS (promedio ultimos N segundos)
@@ -181,12 +178,12 @@ protected:
     float m_cameraSpeed = 0.03f;         // distancia por pulsacion/step
     float m_mouseSensitivity = 0.1f;     // grados por pixel de raton
     bool m_mouseLookEnabled = true;      // permitir mirar libremente con el mouse
-    int m_cameraMovementMode = 1;        // 0 = FPS, 1 = GOD
+    int m_cameraMovementMode = 0;        // 0 = FPS, 1 = GOD
 
     // Helpers para la camara
     void computeCameraVectors();
     void updateViewMatrix();
-    // Render a temporary loading screen with a message (used during setup)
+    // loading screen 
     void renderLoadingScreen(const std::string& message);
 
     // Matrices
@@ -243,7 +240,7 @@ protected:
     std::string m_sphereDiffusePath;
     std::string m_sphereNormalPath;
 
-    // Jug <-> glass pour animation (glass is a plate submesh)
+    // Jug <-> glass animation 
     int m_plateGlassSubMeshIndex = -1;
     glm::vec3 m_plateGlassBaseTranslation = glm::vec3(0.0f);
     int m_plateKnifeSubMeshIndex = -1;
@@ -258,8 +255,6 @@ protected:
     float m_cutleryAnimPhase = 0.0f;
     float m_cutleryAnimSpeed = 2.2f;
     bool m_cutleryAnimEnabled = true;
-    // Per-object ambient boost (stove)
-    float m_stoveAmbientBoost = 1.0f;
 
     // Mouse tracking
     double m_lastMouseX = 0.0;
@@ -487,6 +482,11 @@ protected:
     GLuint m_skyboxVBO = 0;
     GLuint m_skyboxTexture = 0;
 
-    
-    // (Normal and vertex shaders removed)
+    static constexpr int ReflectionMapSize = 256;
+    GLuint m_reflectionFBO = 0;
+    GLuint m_reflectionRBO = 0;
+    GLuint m_plateReflectionMap = 0;
+    GLuint m_jugReflectionMap = 0;
+    GLuint m_axeReflectionMap = 0;
+
 };
